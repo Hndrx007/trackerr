@@ -65,3 +65,16 @@ test("Verification catches a wrong file: a different clip fails frame count, rat
       assert(failed.includes(n), `expected "${n}" to fail; failed: ${failed.join(", ")}`);
   } finally { a.dispose(); }
 }, { slow: true });
+
+test("Output colour tags: primaries and transfer from the source, matrix and range from the encoder", async () => {
+  const { outputColorSpace } = await import("../app/export.js");
+  // What Chrome sometimes reports for canvas frames: the sRGB transfer curve.
+  eq(outputColorSpace({ primaries: "bt709", transfer: "bt709", matrix: "bt709", fullRange: false },
+    { primaries: "bt709", transfer: "iec61966-2-1", matrix: "bt709", fullRange: false }),
+    { primaries: "bt709", transfer: "bt709", matrix: "bt709", fullRange: false });
+  // Encoder converted with BT.601: keep that matrix so the file decodes correctly.
+  eq(outputColorSpace({ primaries: "bt709", transfer: "bt709", matrix: "bt709", fullRange: false },
+    { matrix: "smpte170m", fullRange: false }).matrix, "smpte170m");
+  // Untagged source: Rec.709, as Resolve assumes.
+  eq(outputColorSpace({}, {}), { primaries: "bt709", transfer: "bt709", matrix: "bt709", fullRange: false });
+});
