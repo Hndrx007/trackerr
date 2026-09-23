@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hero Tracker tests</title>
+<style>
+  :root{ --bg:#1c1c1c; --panel:#242424; --edge:#383838; --ink:#d6d6d6; --dim:#8c8c8c;
+    --accent:#6fa8dc; --ok:#7fbf7f; --warn:#d9b35c; --bad:#e08a6a; }
+  body{margin:0;padding:16px 20px 60px;background:var(--bg);color:var(--ink);
+    font:13px/1.5 system-ui,"Segoe UI",sans-serif;font-variant-numeric:tabular-nums;max-width:1100px}
+  h1{font-size:15px;margin:0 0 4px} h2{font-size:13px;margin:22px 0 6px;color:var(--dim);font-weight:600}
+  .bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:10px 0 4px}
+  button,label.btn{background:#2e2e2e;color:var(--ink);border:1px solid var(--edge);border-radius:3px;
+    padding:5px 12px;font:inherit;cursor:pointer}
+  button:hover,label.btn:hover{border-color:var(--accent)}
+  input[type=file]{display:none}
+  #summary{margin-left:auto;font-weight:600}
+  .t{padding:3px 8px;border-left:3px solid var(--edge);margin:2px 0;background:var(--panel)}
+  .t b{display:inline-block;width:36px} .t i{color:var(--dim);font-style:normal;font-size:11px}
+  .t.pass{border-color:var(--ok)} .t.pass b{color:var(--ok)}
+  .t.fail{border-color:var(--bad)} .t.fail b{color:var(--bad)}
+  .t.run{border-color:var(--accent);color:var(--dim)}
+  pre{margin:4px 0 2px 36px;white-space:pre-wrap;color:var(--dim);font:12px/1.45 ui-monospace,Consolas,monospace}
+  .t.fail pre{color:var(--bad)}
+</style>
+</head>
+<body>
+<h1>Hero Tracker · in-browser tests</h1>
+<div class="bar">
+  <button id="all">Run all</button>
+  <button id="fast">Run fast only</button>
+  <label class="btn" for="clip">Round trip on my own clip…</label><input type="file" id="clip" accept="video/mp4,video/quicktime,.mp4,.mov">
+  <span id="summary"></span>
+</div>
+<div id="out"></div>
+<script type="module">
+import { run } from "./tests/harness.js";
+import "./tests/media.test.js";
+import "./tests/render.test.js";
+import "./tests/ui.test.js";
+import { roundTrip } from "./tests/roundtrip.test.js";
+
+const out = document.getElementById("out"), summary = document.getElementById("summary");
+window.testResults = null;
+
+async function go(opts) {
+  out.innerHTML = ""; summary.textContent = "running…";
+  const t0 = performance.now();
+  const results = await run(out, opts);
+  const failed = results.filter(r => !r.pass).length;
+  summary.textContent = `${results.length - failed} passed, ${failed} failed · ${((performance.now() - t0) / 1000).toFixed(1)} s`;
+  summary.style.color = failed ? "var(--bad)" : "var(--ok)";
+  window.testResults = results;
+}
+document.getElementById("all").onclick = () => go({ includeSlow: true });
+document.getElementById("fast").onclick = () => go({ includeSlow: false });
+
+// Round trip on a user clip: exports to the browser's private storage (not the Downloads folder).
+document.getElementById("clip").onchange = async e => {
+  const file = e.target.files[0]; if (!file) return;
+  out.innerHTML = "<h2>Round trip on your clip</h2>";
+  const row = document.createElement("div"); row.className = "t run"; row.textContent = `${file.name}: starting…`; out.append(row);
+  summary.textContent = "running…"; summary.style.color = "";
+  try {
+    const { text } = await roundTrip(file, {
+      onProgress: ({ done, total, fps, eta }) =>
+        row.textContent = `${file.name}: exporting ${done}/${total} · ${fps.toFixed(1)} fps · ${Math.ceil(eta)} s left`,
+    });
+    row.className = "t pass"; row.replaceChildren(Object.assign(document.createElement("b"), { textContent: "pass" }), ` ${file.name}`);
+    row.append(Object.assign(document.createElement("pre"), { textContent: text }));
+    summary.textContent = "round trip passed"; summary.style.color = "var(--ok)";
+    window.testResults = [{ name: file.name, pass: true, note: text }];
+  } catch (err) {
+    console.error(err);
+    row.className = "t fail"; row.replaceChildren(Object.assign(document.createElement("b"), { textContent: "FAIL" }), ` ${file.name}`);
+    row.append(Object.assign(document.createElement("pre"), { textContent: err.message }));
+    summary.textContent = "round trip failed"; summary.style.color = "var(--bad)";
+    window.testResults = [{ name: file.name, pass: false, error: err.message }];
+  }
+};
+
+if (new URLSearchParams(location.search).has("run")) go({ includeSlow: true });
+</script>
+</body>
+</html>

@@ -1,47 +1,54 @@
 # Hero Tracker
 
-A client-side browser tool that bakes a surveillance-HUD tracking effect (a thermal hero plus a composed swarm of tracked boxes) into H.264 footage graded in DaVinci Resolve, and exports a frame-exact MP4 for the timeline.
+A client-side browser tool that bakes a surveillance-HUD tracking effect (a thermal hero plus a composed swarm of tracked boxes) into H.264 footage graded in DaVinci Resolve. It exports a frame-exact MP4 for the timeline. The video never leaves the machine.
 
 The full spec is in [docs/hero-tracker-spec.md](docs/hero-tracker-spec.md).
 
-## Status: M0 capability spike
+## Status
 
-Only `spike.html` exists so far. It measures whether the editor's laptop can run the browser approach. The go/no-go decision is made from its numbers before any app code is written.
+| Milestone | State |
+|---|---|
+| M0 capability spike | done: **go** ([results](docs/m0-results.md)) |
+| M1 frame-exact round trip | automated acceptance passes; manual Resolve check pending ([results](docs/m1-results.md), [Resolve check](docs/m1-resolve-check.md)) |
+| M2 analysis | next |
 
 ## Run it
 
-It needs Chrome or Edge on Windows, and must be served over HTTP. Opening it from `file://` breaks the module imports and the model fetch.
+It needs Chrome or Edge on Windows, and must be served over HTTP. Opening it from `file://` breaks the module imports.
 
 ```bash
 python -m http.server 8000
 ```
 
-Then open <http://localhost:8000/spike.html>.
-
-1. Before opening the browser, set it to use the discrete GPU: **Windows Settings → System → Display → Graphics**, then choose Chrome or Edge and **High performance**. Restart the browser afterwards.
-2. Click **Open clip…** and pick a 60-second 4K H.264 MP4 rendered from Resolve.
-3. Click **Run all**. The full run takes a few minutes: it decodes the clip twice, then transcodes it once.
-4. Click **Copy results (JSON)** and send the text back.
-
-What it measures:
-
-| Test | Number |
+| Page | What it is |
 |---|---|
-| 1 Environment | WebCodecs, WebGPU adapter name, whether 4K H.264 High 5.1/5.2 hardware encode is supported |
-| 2 Clip info | container, codec, size, frame count, frame rate, CFR check (a preview of M1 validation) |
-| 3 Decode | full-speed decode fps over the whole clip |
-| 4 YOLO WebGPU | 640 px inference fps, then end-to-end fps on 300 real frames |
-| 5 YOLO WASM | the same numbers for the fallback, single-threaded, because this server sends no COOP/COEP headers |
-| 6 Encode | 4K H.264 encode fps (synthetic frames), then a decode → 4K canvas → encode transcode of the whole clip |
+| <http://localhost:8000/> | The app: open a clip, step through it, **Export clip**. |
+| <http://localhost:8000/tests.html> | In-browser tests. **Run all** runs about 40 tests in a few seconds. **Round trip on my own clip…** exports any clip to browser storage and verifies it, with no save dialog. |
+| <http://localhost:8000/spike.html> | The M0 capability spike. |
 
-The optional **Also save transcode to disk** checkbox streams the transcode to a file you choose, which tests the File System Access path.
+For the discrete GPU, set the browser to **High performance** in Windows Settings → System → Display → Graphics.
 
 ## Layout
 
 ```
-spike.html              M0 capability spike
-models/yolov8n.onnx     person detector (yolo export model=yolov8n.pt format=onnx imgsz=640)
-docs/                   build spec
+index.html               app shell
+app/
+  main.js                state machine and wiring
+  env.js                 capability checks, encoder selection
+  media.js               Mediabunny input, validation, frame table, the shared frame iterator
+  export.js              render → encode → stream to disk; verification of the written file
+  errors.js              UserError: messages written for the editor
+  lib.js                 pinned third-party imports (change versions here only)
+  render/renderer.js     WebGL2 renderer shared by preview and export
+  render/glyphs.js       glyph atlas for text
+  render/burnin.js       M1 test overlay: frame number and a machine-readable marker
+  ui/viewer.js           frame viewer
+  ui/timeline.js         timecode, frame stepping, scrubber
+  ui/style.css
+tests.html, tests/       in-browser tests; fixtures in tests/fixtures (see tools/make-fixtures.sh)
+spike.html               M0 capability spike
+models/yolov8n.onnx      person detector (M2)
+docs/                    spec and milestone results
 reference/tracker-v2.html  earlier prototype (point tracking only is reused)
 ```
 
@@ -49,7 +56,9 @@ reference/tracker-v2.html  earlier prototype (point tracking only is reused)
 
 ## Libraries
 
-These are pinned on jsDelivr. There's no build step.
+These are pinned on jsDelivr in `app/lib.js`. There's no build step.
 
-- [Mediabunny](https://mediabunny.dev) 1.59.1
-- [onnxruntime-web](https://onnxruntime.ai) 1.30.0 (WebGPU bundle, WASM fallback)
+- [Mediabunny](https://mediabunny.dev) 1.59.1: demux, decode, encode, mux.
+- [onnxruntime-web](https://onnxruntime.ai) 1.30.0: person detection (M2).
+
+The test fixture `tests/fixtures/zidane.jpg` is an Ultralytics sample image (AGPL-3.0).

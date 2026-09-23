@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hero Tracker</title>
+<link rel="stylesheet" href="app/ui/style.css">
+</head>
+<body>
+<header class="top">
+  <span class="brand">Hero Tracker</span>
+  <button id="open">Open</button>
+  <input type="file" id="file" accept="video/mp4,video/quicktime,.mp4,.mov" hidden>
+  <span class="clip-info" id="clipInfo"></span>
+  <span class="spacer"></span>
+  <button class="sys" id="sys" popovertarget="envPanel"><span class="dot" id="sysDot"></span><span id="sysText">Checking browser…</span></button>
+  <button class="primary" id="export" disabled>Export clip</button>
+</header>
+
+<div class="work">
+  <main class="stage" id="stage">
+    <div class="drop" id="drop">
+      <h2>Drop a clip here, or Open</h2>
+      <p>H.264 8-bit, MP4 or MOV, constant frame rate, up to 3840×2160.</p>
+      <p>Render the graded shot from Resolve as H.264 and open that. The effect is baked in after the grade, so the tool only takes H.264 renders.</p>
+      <div id="dropMsg"></div>
+    </div>
+    <canvas id="view" hidden></canvas>
+  </main>
+
+  <aside class="panel" id="panel">
+    <section>
+      <h3>Clip</h3>
+      <dl id="clipDetails"><dt>No clip open</dt><dd></dd></dl>
+    </section>
+    <section>
+      <h3>Export</h3>
+      <div class="row">
+        <label for="bitrate">Bitrate</label>
+        <input type="number" id="bitrate" min="1" max="300" step="0.1" disabled title="Double-click to reset">
+        <span>Mbps</span>
+      </div>
+      <p class="note" id="bitrateNote">Default is 0.35 bits per pixel per frame. Double-click to reset.</p>
+      <p class="note">H.264 High, a keyframe every second, no audio. Same size, frame rate and frame count as the source.</p>
+    </section>
+    <section>
+      <h3>Overlay</h3>
+      <p class="note">M1 test overlay: each frame shows its frame number, plus a marker strip the export check reads back. The HUD look replaces it in M3.</p>
+    </section>
+  </aside>
+</div>
+
+<footer class="transport" id="transport">
+  <span class="tc" data-tc>--:--:--:--</span>
+  <span class="fr"><span data-frame>f –</span> <span data-total></span></span>
+  <span class="steps">
+    <button data-prev title="Previous frame (←), 1 s back (Shift+←)" disabled>◀</button>
+    <button data-next title="Next frame (→), 1 s on (Shift+→)" disabled>▶</button>
+  </span>
+  <span></span>
+  <input type="range" data-scrub min="0" max="0" value="0" disabled aria-label="Frame">
+</footer>
+
+<div popover id="envPanel"><ul id="envList"></ul></div>
+
+<dialog id="exportDlg">
+  <h2 id="dlgTitle">Exporting</h2>
+  <div id="dlgBody"></div>
+  <div class="progress" id="dlgBarWrap"><i id="dlgBar"></i></div>
+  <div class="stats" id="dlgStats"></div>
+  <div class="actions"><button id="dlgCancel">Cancel</button><button id="dlgClose" class="primary" hidden>Close</button></div>
+</dialog>
+
+<script type="module" src="app/main.js"></script>
+</body>
+</html>

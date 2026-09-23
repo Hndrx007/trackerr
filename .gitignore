@@ -2,3 +2,6 @@
 *.mov
 .venv/
 *.pt
+_local/
+!tests/fixtures/*.mp4
+!tests/fixtures/*.mov
