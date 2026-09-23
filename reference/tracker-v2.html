@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tracker v2 — feature-cluster detection</title>
+<style>
+  :root{
+    --bg:#08090b; --panel:#101216; --edge:#20242b;
+    --ink:#c9ced6; --dim:#666e7a; --hot:#ffb020; --alt:#4ad8c0;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:var(--bg);color:var(--ink);display:flex;height:100vh;overflow:hidden;
+    font:12px/1.5 ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+  aside{
+    width:272px;flex:none;background:var(--panel);border-right:1px solid var(--edge);
+    overflow-y:auto;padding:13px 13px 44px;
+  }
+  h1{font-size:13px;letter-spacing:.32em;color:var(--hot);font-weight:600}
+  .sub{font-size:9.5px;letter-spacing:.2em;color:var(--dim);margin:3px 0 16px}
+  fieldset{border:0;margin-bottom:15px}
+  legend{
+    font-size:9.5px;letter-spacing:.17em;color:var(--dim);
+    text-transform:uppercase;margin-bottom:6px;
+  }
+  .row{display:flex;gap:4px;flex-wrap:wrap}
+  button.seg{
+    flex:1 1 auto;min-width:36px;padding:6px 4px;background:#171a20;color:var(--ink);
+    border:1px solid var(--edge);border-radius:2px;font:inherit;font-size:10.5px;cursor:pointer;
+  }
+  button.seg:hover{background:#1e222a}
+  button.seg[aria-pressed=true]{background:var(--hot);color:#08090b;border-color:var(--hot);font-weight:600}
+  button.seg:focus-visible,input:focus-visible{outline:2px solid var(--alt);outline-offset:1px}
+  label.sl{display:block;margin-bottom:9px}
+  label.sl span{display:flex;justify-content:space-between;color:var(--dim);margin-bottom:3px}
+  label.sl b{color:var(--ink);font-weight:500}
+  input[type=range]{width:100%;accent-color:var(--hot);background:transparent}
+  .act{
+    width:100%;padding:9px;margin-bottom:5px;background:transparent;color:var(--hot);
+    border:1px solid var(--hot);border-radius:2px;font:inherit;letter-spacing:.09em;cursor:pointer;
+  }
+  .act:hover{background:var(--hot);color:#08090b}
+  main{flex:1;display:flex;flex-direction:column;min-width:0}
+  .stage{flex:1;display:grid;place-items:center;padding:14px;min-height:0;background:#000}
+  .stage.alpha{
+    background-color:#2a2d33;
+    background-image:
+      linear-gradient(45deg,#1a1d22 25%,transparent 25%,transparent 75%,#1a1d22 75%),
+      linear-gradient(45deg,#1a1d22 25%,transparent 25%,transparent 75%,#1a1d22 75%);
+    background-size:18px 18px;background-position:0 0,9px 9px;
+  }
+  canvas{max-width:100%;max-height:100%;display:block}
+  .empty{color:var(--dim);text-align:center;letter-spacing:.1em;line-height:2.1}
+  .bar{
+    border-top:1px solid var(--edge);padding:7px 13px;display:flex;gap:18px;
+    color:var(--dim);font-size:10.5px;background:var(--panel);flex-wrap:wrap;
+  }
+  .bar b{color:var(--hot);font-weight:500}
+  @media(max-width:820px){body{flex-direction:column}aside{width:100%;max-height:45vh;border-right:0;border-bottom:1px solid var(--edge)}}
+  @media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<aside>
+  <h1>TRACKER v2</h1>
+  <div class="sub">FEATURE-CLUSTER DETECTION</div>
+
+  <button class="act" id="pick">Load video</button>
+  <button class="act" id="cam">Use camera</button>
+  <input type="file" id="file" accept="video/*" hidden>
+
+  <fieldset><legend>View</legend>
+    <div class="row" data-seg="view">
+      <button class="seg" data-v="comp" aria-pressed="true">Composite</button>
+      <button class="seg" data-v="alpha">Overlay only</button>
+      <button class="seg" data-v="points">Points</button>
+    </div>
+  </fieldset>
+
+  <fieldset><legend>Density</legend>
+    <label class="sl"><span>Feature points <b id="ptsV">140</b></span>
+      <input type="range" id="pts" min="40" max="300" value="140"></label>
+    <label class="sl"><span>Sensitivity <b id="qualV">0.012</b></span>
+      <input type="range" id="qual" min="2" max="80" value="12"></label>
+    <label class="sl"><span>Tight boxes <b id="l0V">22</b></span>
+      <input type="range" id="l0" min="0" max="40" value="22"></label>
+    <label class="sl"><span>Mid boxes <b id="l1V">10</b></span>
+      <input type="range" id="l1" min="0" max="24" value="10"></label>
+    <label class="sl"><span>Wide boxes <b id="l2V">4</b></span>
+      <input type="range" id="l2" min="0" max="12" value="4"></label>
+  </fieldset>
+
+  <fieldset><legend>Region style</legend>
+    <div class="row" data-seg="style">
+      <button class="seg" data-v="basic">Basic</button>
+      <button class="seg" data-v="scope" aria-pressed="true">Scope</button>
+      <button class="seg" data-v="corner">Corner</button>
+      <button class="seg" data-v="dash">Dash</button>
+    </div>
+  </fieldset>
+
+  <fieldset><legend>Readout</legend>
+    <div class="row" data-seg="text">
+      <button class="seg" data-v="index" aria-pressed="true">Index</button>
+      <button class="seg" data-v="id">ID</button>
+      <button class="seg" data-v="pos">Pos</button>
+      <button class="seg" data-v="none">Off</button>
+    </div>
+  </fieldset>
+
+  <fieldset><legend>Connections</legend>
+    <label class="sl"><span>Link rate <b id="linkV">0.30</b></span>
+      <input type="range" id="link" min="0" max="100" value="30"></label>
+    <div class="row" data-seg="hub">
+      <button class="seg" data-v="chain" aria-pressed="true">Chain</button>
+      <button class="seg" data-v="hub">Hub</button>
+    </div>
+  </fieldset>
+
+  <fieldset><legend>Render</legend>
+    <label class="sl"><span>Stroke <b id="strV">1</b></span>
+      <input type="range" id="str" min="1" max="4" value="1"></label>
+    <label class="sl"><span>Smoothing <b id="smV">0.30</b></span>
+      <input type="range" id="sm" min="5" max="100" value="30"></label>
+  </fieldset>
+</aside>
+
+<main>
+  <div class="stage" id="stage">
+    <div class="empty" id="empty">NO SOURCE<br>Load a video or open the camera</div>
+    <canvas id="out" hidden></canvas>
+  </div>
+  <div class="bar">
+    <span>PTS <b id="mPts">0</b></span>
+    <span>BOXES <b id="mBox">0</b></span>
+    <span>TRACK <b id="mTrk">0.0</b>ms</span>
+    <span>CLUSTER <b id="mCls">0.0</b>ms</span>
+    <span>DRAW <b id="mDrw">0.0</b>ms</span>
+    <span>FPS <b id="mFps">0</b></span>
+  </div>
+</main>
+
+<script>
+"use strict";
+/* =====================================================================
+   Detection: Shi-Tomasi corners, tracked with pyramidal Lucas-Kanade,
+   clustered at three distance thresholds so boxes nest.
+
+   The point set PERSISTS across frames. That is the whole trick — a
+   detector that re-finds corners every frame produces boxes that
+   teleport. Tracking the same points means the boxes move with the
+   content instead of with the grid.
+   ===================================================================== */
+
+const LADDER = [12,16,24,32,48,64,96,128,192,256];
+const snap = v => LADDER.reduce((a,b)=>Math.abs(b-v)<Math.abs(a-v)?b:a);
+
+/* ---- image pyramid -------------------------------------------------- */
+function pyramid(gray,w,h,levels){
+  const out=[{d:gray,w,h}];
+  for(let i=1;i<levels;i++){
+    const p=out[i-1], nw=p.w>>1, nh=p.h>>1;
+    if(nw<8||nh<8) break;
+    const d=new Float32Array(nw*nh);
+    for(let y=0;y<nh;y++)for(let x=0;x<nw;x++){
+      const a=2*y*p.w+2*x;
+      d[y*nw+x]=(p.d[a]+p.d[a+1]+p.d[a+p.w]+p.d[a+p.w+1])*0.25;
+    }
+    out.push({d,w:nw,h:nh});
+  }
+  return out;
+}
+
+/* ---- Shi-Tomasi corner detection ------------------------------------ */
+function corners(g,w,h,{max=140,quality=0.012,minDist=9,occupied=null}={}){
+  const Ix=new Float32Array(w*h), Iy=new Float32Array(w*h);
+  for(let y=1;y<h-1;y++)for(let x=1;x<w-1;x++){
+    const i=y*w+x;
+    Ix[i]=(g[i+1]-g[i-1])*0.5;
+    Iy[i]=(g[i+w]-g[i-w])*0.5;
+  }
+  // structure tensor, box-summed over a 5x5 window
+  const R=2, score=new Float32Array(w*h);
+  for(let y=R;y<h-R;y++)for(let x=R;x<w-R;x++){
+    let a=0,b=0,c=0;
+    for(let dy=-R;dy<=R;dy++)for(let dx=-R;dx<=R;dx++){
+      const i=(y+dy)*w+x+dx, ix=Ix[i], iy=Iy[i];
+      a+=ix*ix; b+=ix*iy; c+=iy*iy;
+    }
+    const t=(a+c)*0.5, dsc=Math.sqrt(Math.max(0,((a-c)*0.5)**2+b*b));
+    score[y*w+x]=t-dsc;              // min eigenvalue
+  }
+  let peak=0; for(let i=0;i<score.length;i++) if(score[i]>peak) peak=score[i];
+  const thr=peak*quality;
+  const cand=[];
+  for(let y=R;y<h-R;y++)for(let x=R;x<w-R;x++){
+    const s=score[y*w+x];
+    if(s>thr) cand.push([s,x,y]);
+  }
+  cand.sort((p,q)=>q[0]-p[0]);
+  // greedy min-distance suppression on a coarse occupancy grid
+  const cell=Math.max(1,minDist), gw=Math.ceil(w/cell), gh=Math.ceil(h/cell);
+  const grid=occupied||new Int32Array(gw*gh).fill(-1);
+  const pts=[];
+  outer: for(const [,x,y] of cand){
+    if(pts.length>=max) break;
+    const gx=(x/cell)|0, gy=(y/cell)|0;
+    for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
+      const nx=gx+dx, ny=gy+dy;
+      if(nx<0||ny<0||nx>=gw||ny>=gh) continue;
+      const k=grid[ny*gw+nx];
+      if(k>=0){
+        const px=k&0xffff, py=k>>>16;
+        if(Math.hypot(px-x,py-y)<minDist) continue outer;
+      }
+    }
+    grid[gy*gw+gx]=(y<<16)|x;
+    pts.push([x,y]);
+  }
+  return {pts,grid,gw,gh,cell};
+}
+
+/* ---- pyramidal Lucas-Kanade ----------------------------------------- */
+function track(pa,pb,pts,{win=8,iters=6}={}){
+  const out=new Array(pts.length);
+  const top=pa.length-1;
+  for(let n=0;n<pts.length;n++){
+    let gx=0, gy=0, ok=true;          // flow guess, refined coarse-to-fine
+    for(let L=top;L>=0;L--){
+      const A=pa[L], B=pb[L];
+      let px=pts[n][0]/(1<<L), py=pts[n][1]/(1<<L);
+      let vx=gx, vy=gy;
+      // structure tensor at the patch in A
+      let a=0,b=0,c=0;
+      const gxs=[],gys=[],ref=[];
+      for(let dy=-win;dy<=win;dy++)for(let dx=-win;dx<=win;dx++){
+        const x=Math.round(px+dx), y=Math.round(py+dy);
+        if(x<1||y<1||x>=A.w-1||y>=A.h-1){gxs.push(0);gys.push(0);ref.push(0);continue;}
+        const i=y*A.w+x;
+        const ix=(A.d[i+1]-A.d[i-1])*0.5, iy=(A.d[i+A.w]-A.d[i-A.w])*0.5;
+        a+=ix*ix; b+=ix*iy; c+=iy*iy;
+        gxs.push(ix); gys.push(iy); ref.push(A.d[i]);
+      }
+      const det=a*c-b*b;
+      if(det<1e-5){ ok=false; break; }
+      for(let it=0;it<iters;it++){
+        let e1=0,e2=0,k=0;
+        for(let dy=-win;dy<=win;dy++)for(let dx=-win;dx<=win;dx++,k++){
+          const bx=px+vx+dx, by=py+vy+dy;
+          const x0=Math.floor(bx), y0=Math.floor(by);
+          let v=0;
+          if(x0>=0&&y0>=0&&x0<B.w-1&&y0<B.h-1){
+            const fx=bx-x0, fy=by-y0, i=y0*B.w+x0;
+            v=B.d[i]*(1-fx)*(1-fy)+B.d[i+1]*fx*(1-fy)+
+              B.d[i+B.w]*(1-fx)*fy+B.d[i+B.w+1]*fx*fy;
+          }
+          const dI=ref[k]-v;
+          e1+=dI*gxs[k]; e2+=dI*gys[k];
+        }
+        const ux=(c*e1-b*e2)/det, uy=(a*e2-b*e1)/det;
+        vx+=ux; vy+=uy;
+        if(ux*ux+uy*uy<1e-4) break;
+      }
+      gx=vx; gy=vy;
+      if(L>0){ gx*=2; gy*=2; }
+    }
+    if(!ok){ out[n]=null; continue; }
+    const nx=pts[n][0]+gx, ny=pts[n][1]+gy;
+    out[n]=(nx<1||ny<1||nx>=pa[0].w-1||ny>=pa[0].h-1)?null:[nx,ny];
+  }
+  return out;
+}
+
+/* ---- single-linkage clustering -------------------------------------- */
+function linkage(pts,thresh){
+  const n=pts.length, parent=new Int32Array(n);
+  for(let i=0;i<n;i++) parent[i]=i;
+  const find=a=>{ while(parent[a]!==a){parent[a]=parent[parent[a]];a=parent[a];} return a; };
+  const t2=thresh*thresh;
+  for(let i=0;i<n;i++)for(let j=i+1;j<n;j++){
+    const dx=pts[i][0]-pts[j][0], dy=pts[i][1]-pts[j][1];
+    if(dx*dx+dy*dy<t2){ const a=find(i),b=find(j); if(a!==b) parent[a]=b; }
+  }
+  const m=new Map();
+  for(let i=0;i<n;i++){ const r=find(i); (m.get(r)||m.set(r,[]).get(r)).push(i); }
+  return [...m.values()];
+}
+
+/* =====================================================================
+   Detector state
+   ===================================================================== */
+const P={ view:"comp", pts:140, qual:0.012, l0:22, l1:10, l2:4,
+          style:"scope", text:"index", link:0.30, hub:"chain",
+          str:1, sm:0.30 };
+const LEVELS=[11,24,52], MINMEM=[1,3,6];
+
+let PT=[], PID=[], prevPyr=null, nextPid=1, nextCid=1, frameNo=0;
+let boxState=new Map();   // "lvl:cid" -> {cx,cy,w,h,members:Set}
+
+function detect(gray,w,h){
+  frameNo++;
+  const pyr=pyramid(gray,w,h,3);
+  let tracked=0;
+
+  if(prevPyr && PT.length>=8){
+    const moved=track(prevPyr,pyr,PT);
+    const np=[],ni=[];
+    for(let i=0;i<moved.length;i++) if(moved[i]){ np.push(moved[i]); ni.push(PID[i]); }
+    PT=np; PID=ni; tracked=np.length;
+  }else{ PT=[]; PID=[]; }
+
+  if(PT.length<P.pts*0.75 || frameNo%12===0){
+    const cell=9, gw=Math.ceil(w/cell), gh=Math.ceil(h/cell);
+    const grid=new Int32Array(gw*gh).fill(-1);
+    for(const [x,y] of PT) grid[(((y/cell)|0)*gw)+((x/cell)|0)]=((y|0)<<16)|(x|0);
+    const {pts:fresh}=corners(gray,w,h,{max:P.pts-PT.length,quality:P.qual,minDist:cell,occupied:grid});
+    for(const p of fresh){ PT.push(p); PID.push(nextPid++); }
+  }
+  if(!PT.length){ prevPyr=pyr; return {boxes:[],tracked}; }
+
+  const boxes=[], nextState=new Map();
+  const caps=[P.l0,P.l1,P.l2];
+
+  for(let lvl=0;lvl<3;lvl++){
+    if(caps[lvl]<=0) continue;
+    let groups=linkage(PT,LEVELS[lvl]).filter(g=>g.length>=MINMEM[lvl]);
+    groups.sort((a,b)=>b.length-a.length);
+    groups=groups.slice(0,caps[lvl]);
+
+    const prev=[...boxState.entries()].filter(([k])=>k.startsWith(lvl+":"));
+    const taken=new Set();
+
+    for(const g of groups){
+      const members=new Set(g.map(i=>PID[i]));
+      // identity by member overlap — survives individual points dying
+      let best=null,bestJ=0;
+      for(const [k,st] of prev){
+        if(taken.has(k)) continue;
+        let inter=0; for(const m of members) if(st.members.has(m)) inter++;
+        if(!inter) continue;
+        const j=inter/(members.size+st.members.size-inter);
+        if(j>bestJ){ bestJ=j; best=k; }
+      }
+      let key;
+      if(best && bestJ>0.34){ key=best; taken.add(key); }
+      else key=lvl+":"+(nextCid++);
+
+      let cx=0,cy=0,x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+      for(const i of g){
+        const [x,y]=PT[i]; cx+=x; cy+=y;
+        if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y;
+      }
+      cx/=g.length; cy/=g.length;
+      const ext=Math.max(x1-x0,y1-y0);
+      let bw=snap(Math.max(ext*1.55,14)), bh=snap(Math.max(ext*1.27,12));
+
+      const st=boxState.get(key);
+      if(st){
+        cx=st.cx+(cx-st.cx)*P.sm;
+        cy=st.cy+(cy-st.cy)*P.sm;
+        // resist size flicker: hold unless more than one ladder step away
+        if(Math.abs(LADDER.indexOf(bw)-LADDER.indexOf(st.w))<2){ bw=st.w; bh=st.h; }
+      }
+      nextState.set(key,{cx,cy,w:bw,h:bh,members});
+      boxes.push({x:cx-bw/2,y:cy-bh/2,w:bw,h:bh,id:parseInt(key.split(":")[1]),lvl});
+    }
+  }
+  boxState=nextState; prevPyr=pyr;
+  return {boxes,tracked};
+}
+
+/* =====================================================================
+   Rendering
+   ===================================================================== */
+function drawBox(ctx,b,sx,sy){
+  const x=b.x*sx,y=b.y*sy,w=b.w*sx,h=b.h*sy,cx=x+w/2,cy=y+h/2;
+  const t=Math.min(w,h)*0.17;
+  ctx.beginPath();
+  if(P.style==="basic") ctx.rect(x,y,w,h);
+  else if(P.style==="corner"){
+    const c=Math.min(w,h)*0.3;
+    ctx.moveTo(x,y+c);ctx.lineTo(x,y);ctx.lineTo(x+c,y);
+    ctx.moveTo(x+w-c,y);ctx.lineTo(x+w,y);ctx.lineTo(x+w,y+c);
+    ctx.moveTo(x+w,y+h-c);ctx.lineTo(x+w,y+h);ctx.lineTo(x+w-c,y+h);
+    ctx.moveTo(x+c,y+h);ctx.lineTo(x,y+h);ctx.lineTo(x,y+h-c);
+  }else if(P.style==="dash"){ ctx.setLineDash([Math.max(2,w*.07),Math.max(2,w*.05)]); ctx.rect(x,y,w,h); }
+  else{
+    ctx.rect(x,y,w,h);
+    ctx.moveTo(cx-t*2,cy);ctx.lineTo(cx+t*2,cy);
+    ctx.moveTo(cx,cy-t*2);ctx.lineTo(cx,cy+t*2);
+    for(let k=-2;k<=2;k++){ if(!k)continue;
+      ctx.moveTo(cx+k*t*.7,cy-t*.34); ctx.lineTo(cx+k*t*.7,cy+t*.34); }
+  }
+  ctx.stroke(); ctx.setLineDash([]);
+  return [cx,cy];
+}
+
+function readout(b,i){
+  if(P.text==="index") return (i/7).toFixed(4);
+  if(P.text==="id")    return String(b.id).padStart(3,"0");
+  if(P.text==="pos")   return `${Math.round(b.x+b.w/2)},${Math.round(b.y+b.h/2)}`;
+  return null;
+}
+
+/* =====================================================================
+   Loop
+   ===================================================================== */
+const video=document.createElement("video");
+video.muted=true; video.loop=true; video.playsInline=true;
+const out=document.getElementById("out"), ctx=out.getContext("2d");
+const ana=document.createElement("canvas");
+const actx=ana.getContext("2d",{willReadFrequently:true});
+const AW=320;
+let running=false, frames=0, mark=performance.now();
+
+document.querySelectorAll("[data-seg]").forEach(gp=>{
+  const key=gp.dataset.seg;
+  gp.addEventListener("click",e=>{
+    const b=e.target.closest("button.seg"); if(!b) return;
+    gp.querySelectorAll("button.seg").forEach(x=>x.setAttribute("aria-pressed","false"));
+    b.setAttribute("aria-pressed","true");
+    P[key]=b.dataset.v;
+    document.getElementById("stage").classList.toggle("alpha",P.view!=="comp");
+  });
+});
+function sl(id,key,f,s=1){
+  const el=document.getElementById(id),lb=document.getElementById(id+"V");
+  const go=()=>{P[key]=el.value*s; lb.textContent=f(P[key]);};
+  el.addEventListener("input",go); go();
+}
+sl("pts","pts",v=>v.toFixed(0));
+sl("qual","qual",v=>v.toFixed(3),0.001);
+sl("l0","l0",v=>v.toFixed(0));
+sl("l1","l1",v=>v.toFixed(0));
+sl("l2","l2",v=>v.toFixed(0));
+sl("link","link",v=>v.toFixed(2),0.01);
+sl("str","str",v=>v.toFixed(0));
+sl("sm","sm",v=>v.toFixed(2),0.01);
+
+const fi=document.getElementById("file");
+document.getElementById("pick").onclick=()=>fi.click();
+fi.onchange=()=>{ const f=fi.files[0]; if(!f)return;
+  video.srcObject=null; video.src=URL.createObjectURL(f);
+  reset(); video.play().then(start).catch(start); };
+document.getElementById("cam").onclick=async()=>{
+  try{ const s=await navigator.mediaDevices.getUserMedia({video:{width:1280}});
+    video.src=""; video.srcObject=s; reset(); await video.play(); start();
+  }catch(e){ document.getElementById("empty").textContent="CAMERA UNAVAILABLE — "+e.name; }
+};
+function reset(){ PT=[];PID=[];prevPyr=null;boxState=new Map();frameNo=0; }
+function start(){ if(running)return; running=true;
+  document.getElementById("empty").hidden=true; out.hidden=false;
+  requestAnimationFrame(loop); }
+
+function loop(){
+  if(!running) return;
+  requestAnimationFrame(loop);
+  const vw=video.videoWidth, vh=video.videoHeight;
+  if(video.readyState<2||!vw) return;
+  if(out.width!==vw){ out.width=vw; out.height=vh;
+    ana.width=AW; ana.height=Math.max(2,Math.round(AW*vh/vw)); reset(); }
+
+  const t0=performance.now();
+  actx.drawImage(video,0,0,ana.width,ana.height);
+  const im=actx.getImageData(0,0,ana.width,ana.height).data;
+  const n=ana.width*ana.height, gray=new Float32Array(n);
+  for(let i=0,j=0;i<n;i++,j+=4) gray[i]=im[j]*0.299+im[j+1]*0.587+im[j+2]*0.114;
+
+  const t1=performance.now();
+  const {boxes,tracked}=detect(gray,ana.width,ana.height);
+  const t2=performance.now();
+
+  ctx.clearRect(0,0,out.width,out.height);
+  if(P.view==="comp") ctx.drawImage(video,0,0,out.width,out.height);
+
+  const sx=out.width/ana.width, sy=out.height/ana.height;
+  ctx.strokeStyle="#fff"; ctx.fillStyle="#fff"; ctx.lineWidth=P.str;
+  const fs=Math.max(9,Math.round(out.height*0.015));
+  ctx.font=fs+"px ui-monospace,Menlo,Consolas,monospace";
+  ctx.textAlign="center"; ctx.textBaseline="middle";
+
+  if(P.view==="points"){
+    for(const [x,y] of PT){ ctx.beginPath(); ctx.arc(x*sx,y*sy,2,0,6.283); ctx.fill(); }
+  }else{
+    const cs=[];
+    boxes.forEach((b,i)=>{
+      cs.push(drawBox(ctx,b,sx,sy));
+      const lb=readout(b,i);
+      if(lb) ctx.fillText(lb,(b.x+b.w/2)*sx,(b.y+b.h/2)*sy);
+    });
+    const k=Math.round(cs.length*P.link);
+    ctx.beginPath();
+    if(P.hub==="hub" && cs.length){
+      for(let i=1;i<=k&&i<cs.length;i++){ ctx.moveTo(cs[0][0],cs[0][1]); ctx.lineTo(cs[i][0],cs[i][1]); }
+    }else{
+      for(let i=0;i<k&&i+1<cs.length;i++){ ctx.moveTo(cs[i][0],cs[i][1]); ctx.lineTo(cs[i+1][0],cs[i+1][1]); }
+    }
+    ctx.stroke();
+  }
+  const t3=performance.now();
+
+  frames++;
+  if(t3-mark>500){ document.getElementById("mFps").textContent=Math.round(frames*1000/(t3-mark)); frames=0; mark=t3; }
+  document.getElementById("mPts").textContent=PT.length;
+  document.getElementById("mBox").textContent=boxes.length;
+  document.getElementById("mTrk").textContent=(t2-t1).toFixed(1);
+  document.getElementById("mCls").textContent=(t1-t0).toFixed(1);
+  document.getElementById("mDrw").textContent=(t3-t2).toFixed(1);
+}
+</script>
+</body>
+</html>

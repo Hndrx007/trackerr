@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hero Tracker — M0 capability spike</title>
+<style>
+  /* True-neutral greys only; accent is not red (red belongs to the HUD). */
+  :root{
+    --bg:#1c1c1c; --panel:#242424; --edge:#383838; --ink:#d6d6d6; --dim:#8c8c8c;
+    --accent:#6fa8dc; --ok:#7fbf7f; --warn:#d9b35c; --bad:#e08a6a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:13px/1.5 system-ui,"Segoe UI",sans-serif;font-variant-numeric:tabular-nums}
+  header{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:12px 16px;
+    background:var(--panel);border-bottom:1px solid var(--edge)}
+  h1{font-size:14px;font-weight:600;margin:0 12px 0 0;letter-spacing:.02em}
+  button,label.file{background:#2e2e2e;color:var(--ink);border:1px solid var(--edge);
+    border-radius:3px;padding:6px 12px;font:inherit;cursor:pointer}
+  button:hover:not(:disabled),label.file:hover{border-color:var(--accent)}
+  button.primary{border-color:var(--accent);color:var(--accent)}
+  button:disabled{opacity:.4;cursor:default}
+  button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+  input[type=file]{display:none}
+  .file-name{color:var(--dim)}
+  main{padding:16px;max-width:1100px}
+  .status{padding:8px 12px;margin-bottom:14px;background:var(--panel);border:1px solid var(--edge);
+    border-radius:3px;min-height:38px;white-space:pre-wrap}
+  .bar{height:3px;background:var(--edge);margin-top:6px}
+  .bar>i{display:block;height:100%;width:0;background:var(--accent)}
+  section{background:var(--panel);border:1px solid var(--edge);border-radius:3px;margin-bottom:12px}
+  section>h2{display:flex;align-items:center;gap:10px;margin:0;padding:8px 12px;font-size:13px;
+    font-weight:600;border-bottom:1px solid var(--edge)}
+  section>h2 .st{font-weight:400;color:var(--dim);margin-left:auto}
+  section>h2 button{padding:3px 10px;font-size:12px}
+  table{border-collapse:collapse;width:100%}
+  td{padding:4px 12px;border-bottom:1px solid #2c2c2c;vertical-align:top}
+  td:first-child{color:var(--dim);width:38%}
+  tr:last-child td{border-bottom:0}
+  .ok{color:var(--ok)} .warn{color:var(--warn)} .bad{color:var(--bad)}
+  .opts{display:flex;gap:16px;align-items:center;color:var(--dim)}
+  .opts input{accent-color:var(--accent)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Hero Tracker · M0 capability spike</h1>
+  <label class="file" for="file">Open clip…</label>
+  <input type="file" id="file" accept="video/mp4,video/quicktime,.mp4,.mov">
+  <span class="file-name" id="fileName">No clip loaded (H.264 MP4/MOV, ideally 60 s at 4K)</span>
+  <span style="flex:1"></span>
+  <label class="opts"><input type="checkbox" id="toDisk"> Also save transcode to disk</label>
+  <button class="primary" id="runAll">Run all</button>
+  <button id="cancel" disabled>Cancel</button>
+  <button id="copy">Copy results (JSON)</button>
+</header>
+<main>
+  <div class="status" id="status">Loading libraries…<div class="bar"><i id="prog"></i></div></div>
+  <div id="sections"></div>
+</main>
+
+<script type="module">
+import {
+  Input, ALL_FORMATS, BlobSource, VideoSampleSink, EncodedPacketSink, VideoSample,
+  Output, Mp4OutputFormat, StreamTarget, VideoSampleSource,
+} from "https://cdn.jsdelivr.net/npm/mediabunny@1.59.1/dist/bundles/mediabunny.min.mjs";
+import * as ort from "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/ort.webgpu.min.mjs";
+
+ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/";
+ort.env.webgpu.powerPreference = "high-performance";
+
+const MODEL_URL = "models/yolov8n.onnx";
+const YOLO = 640, CONF = 0.35, NMS_IOU = 0.5;
+const E2E_FRAMES = 300, SYNTH_FRAMES = 300;
+
+/* ---------------- results model + UI ---------------- */
+const TESTS = [
+  { key: "env",        title: "1 · Environment",            run: testEnv },
+  { key: "clip",       title: "2 · Clip info + validation", run: testClip,   needsClip: true },
+  { key: "decode",     title: "3 · Full-speed decode",      run: testDecode, needsClip: true },
+  { key: "yoloWebgpu", title: "4 · YOLO on WebGPU",         run: () => testYolo("webgpu") },
+  { key: "yoloWasm",   title: "5 · YOLO on WASM",           run: () => testYolo("wasm") },
+  { key: "encode",     title: "6 · 4K H.264 encode",        run: testEncode },
+];
+const R = { spike: "M0", when: new Date().toISOString(), userAgent: navigator.userAgent };
+const $ = id => document.getElementById(id);
+let file = null, busy = false, cancelled = false;
+let modelBytes = null;
+
+for (const t of TESTS) {
+  const s = document.createElement("section");
+  s.innerHTML = `<h2>${t.title}<span class="st" id="st-${t.key}">not run</span>
+    <button id="run-${t.key}">Run</button></h2><table id="tb-${t.key}"></table>`;
+  $("sections").append(s);
+  $("run-" + t.key).onclick = () => runTests([t]);
+}
+
+function status(msg, frac = null) {
+  $("status").firstChild.textContent = msg;
+  $("prog").style.width = frac == null ? "0" : Math.min(100, frac * 100).toFixed(1) + "%";
+}
+function row(key, label, value, cls = "") {
+  (R[key] ??= {})[label] = value;
+  const tr = document.createElement("tr");
+  tr.innerHTML = `<td></td><td class="${cls}"></td>`;
+  tr.children[0].textContent = label;
+  tr.children[1].textContent = typeof value === "number" ? fmt(value) : String(value);
+  $("tb-" + key).append(tr);
+}
+const fmt = v => v.toLocaleString("en-US", { maximumFractionDigits: Number.isInteger(v) ? 0 : Math.abs(v) < 100 ? 3 : 1 });
+const median = a => { const s = [...a].sort((x, y) => x - y); const m = s.length >> 1;
+  return s.length ? (s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2) : NaN; };
+const heapMB = () => performance.memory ? performance.memory.usedJSHeapSize / 2 ** 20 : null;
+const errText = e => (e && (e.name ? e.name + ": " : "") + (e.message || e)) || String(e);
+
+async function runTests(list) {
+  if (busy) return;
+  busy = true; cancelled = false;
+  document.querySelectorAll("header button:not(#cancel), section button").forEach(b => b.disabled = true);
+  $("cancel").disabled = false;
+  for (const t of list) {
+    if (cancelled) break;
+    R[t.key] = {}; $("tb-" + t.key).innerHTML = "";
+    const st = $("st-" + t.key);
+    if (t.needsClip && !file) { st.textContent = "skipped — open a clip first"; st.className = "st warn"; continue; }
+    st.textContent = "running…"; st.className = "st";
+    const t0 = performance.now();
+    try {
+      await t.run();
+      st.textContent = cancelled ? "cancelled" : `done in ${((performance.now() - t0) / 1000).toFixed(1)} s`;
+      st.className = "st " + (cancelled ? "warn" : "ok");
+    } catch (e) {
+      console.error(e);
+      row(t.key, "error", errText(e), "bad");
+      st.textContent = "failed"; st.className = "st bad";
+    }
+  }
+  status(cancelled ? "Cancelled." : "Finished. Use “Copy results (JSON)” and send the text back.");
+  busy = false;
+  document.querySelectorAll("header button, section button").forEach(b => b.disabled = false);
+  $("cancel").disabled = true;
+}
+
+if (!("showSaveFilePicker" in window)) {
+  $("toDisk").disabled = true;
+  $("toDisk").parentElement.title = "This browser has no File System Access API (showSaveFilePicker).";
+}
+$("runAll").onclick = () => runTests(TESTS);
+$("cancel").onclick = () => { cancelled = true; status("Cancelling…"); };
+$("copy").onclick = async () => {
+  const text = JSON.stringify(R, null, 2);
+  try { await navigator.clipboard.writeText(text); status("Results copied to the clipboard."); }
+  catch { console.log(text); status("Clipboard blocked — results printed to the DevTools console instead."); }
+};
+$("file").onchange = () => {
+  file = $("file").files[0] || null;
+  delete R.clip; $("tb-clip").innerHTML = ""; $("st-clip").textContent = "not run"; $("st-clip").className = "st";
+  $("fileName").textContent = file ? `${file.name} · ${(file.size / 2 ** 20).toFixed(1)} MB` : "No clip loaded";
+};
+
+/* ---------------- shared helpers ---------------- */
+async function openClip() {
+  const input = new Input({ formats: ALL_FORMATS, source: new BlobSource(file) });
+  const track = await input.getPrimaryVideoTrack();
+  if (!track) throw new Error("This file has no video track. Open an H.264 MP4 rendered from Resolve.");
+  return { input, track };
+}
+
+// Presentation-order timestamps from packet metadata (no decoding).
+async function packetTimestamps(track) {
+  const ts = [];
+  for await (const p of new EncodedPacketSink(track).packets(undefined, undefined, { metadataOnly: true })) {
+    ts.push(p.timestamp);
+    if (cancelled) break;
+  }
+  return ts.sort((a, b) => a - b);
+}
+
+function frameRateFrom(ts) {
+  const d = []; for (let i = 1; i < ts.length; i++) d.push(ts[i] - ts[i - 1]);
+  const med = median(d);
+  let worst = 0; for (const x of d) worst = Math.max(worst, Math.abs(x - med) / med);
+  return { fps: 1 / med, medianDelta: med, worstDeviation: worst, cfr: worst <= 0.01 };
+}
+
+// H.264 High profile; level 5.1 up to 30 fps at 4K, 5.2 above (spec § Export).
+const codecFor = fps => fps > 30.5 ? "avc1.640034" : "avc1.640033";
+
+/* ---------------- 1 · environment ---------------- */
+async function testEnv() {
+  const K = "env";
+  row(K, "page origin", location.origin, location.protocol === "file:" ? "bad" : "");
+  const chromium = !!navigator.userAgentData?.brands?.some(b => /Chromium/.test(b.brand));
+  row(K, "browser", chromium ? navigator.userAgentData.brands.map(b => `${b.brand} ${b.version}`).filter(s => !/Not/.test(s)).join(", ")
+    : "Not Chrome or Edge. The tool targets Chrome and Edge on Windows, so these numbers won't carry over (different WebGPU and encoder stack, no streaming save). Re-run in Chrome or Edge.",
+    chromium ? "ok" : "bad");
+  if (location.protocol === "file:") row(K, "note", "Opened from disk. Serve with `python -m http.server` instead — module imports and the model fetch fail on file://.", "bad");
+  row(K, "WebCodecs VideoDecoder", "VideoDecoder" in window, "VideoDecoder" in window ? "ok" : "bad");
+  row(K, "WebCodecs VideoEncoder", "VideoEncoder" in window, "VideoEncoder" in window ? "ok" : "bad");
+  row(K, "File System Access (showSaveFilePicker)", "showSaveFilePicker" in window, "showSaveFilePicker" in window ? "ok" : "bad");
+  row(K, "crossOriginIsolated", self.crossOriginIsolated, self.crossOriginIsolated ? "ok" : "warn");
+  row(K, "hardwareConcurrency", navigator.hardwareConcurrency);
+  row(K, "deviceMemory (GB, browser-rounded)", navigator.deviceMemory ?? "n/a");
+
+  if (!navigator.gpu) row(K, "WebGPU", "not available", "bad");
+  else {
+    const ad = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
+    if (!ad) row(K, "WebGPU adapter", "none returned", "bad");
+    else {
+      const i = ad.info || {};
+      const name = [i.vendor, i.architecture, i.device, i.description].filter(Boolean).join(" · ") || "(browser hides adapter details)";
+      row(K, "WebGPU adapter (high-performance)", name);
+      row(K, "fallback adapter", !!i.isFallbackAdapter, i.isFallbackAdapter ? "bad" : "");
+      const guess = gpuKind(i);
+      row(K, "GPU kind (guess)", guess, guess === "integrated" ? "warn" : "");
+      if (guess === "integrated")
+        row(K, "warning", "Detection is running on the integrated GPU. In Windows Settings → System → Display → Graphics, set your browser to High performance.", "warn");
+      row(K, "maxBufferSize (MB)", Math.round(ad.limits.maxBufferSize / 2 ** 20));
+    }
+  }
+
+  const fps = R.clip?.["frame rate (median delta)"] ?? 24;
+  for (const [codec, label] of [["avc1.640033", "High 5.1"], ["avc1.640034", "High 5.2"]]) {
+    for (const hw of ["prefer-hardware", "no-preference"]) {
+      const cfg = { codec, width: 3840, height: 2160, framerate: codec.endsWith("33") ? Math.min(fps, 30) : 60,
+        bitrate: Math.round(0.35 * 3840 * 2160 * 30), hardwareAcceleration: hw };
+      let ok = false, err = "";
+      try { ok = (await VideoEncoder.isConfigSupported(cfg)).supported; } catch (e) { err = errText(e); }
+      row(K, `4K encode ${label} (${codec}), ${hw}`, err || (ok ? "supported" : "not supported"), ok ? "ok" : "bad");
+    }
+  }
+}
+
+function gpuKind(i) {
+  const s = [i.vendor, i.architecture, i.device, i.description].join(" ").toLowerCase();
+  if (!s.trim()) return "unknown";
+  if (/nvidia|geforce|rtx|gtx|radeon rx|\brx ?\d{3,4}|arc a\d|alchemist|battlemage/.test(s)) return "discrete";
+  if (/intel|uhd|iris|radeon\(tm\) graphics|radeon graphics|vega \d/.test(s)) return "integrated";
+  if (/amd/.test(s)) return "unknown (AMD: check the model)";
+  return "unknown";
+}
+
+/* ---------------- 2 · clip info + validation ---------------- */
+async function testClip() {
+  const K = "clip";
+  status("Reading clip metadata…");
+  const { input, track } = await openClip();
+  try {
+    const fmtName = (await input.getFormat()).name;
+    const codec = await track.getCodec();
+    const w = await track.getDisplayWidth(), h = await track.getDisplayHeight();
+    row(K, "container", fmtName);
+    row(K, "codec", codec ?? "unknown", codec === "avc" ? "ok" : "bad");
+    row(K, "codec string", (await track.getCodecParameterString()) ?? "n/a");
+    row(K, "size", `${w}×${h}`, w <= 3840 && h <= 2160 ? "ok" : "bad");
+    if (w * h < 3840 * 2160 * 0.9)
+      row(K, "note", `Not a 4K clip, so the decode and transcode numbers are for ${w}×${h}. Use a UHD clip for the go/no-go.`, "warn");
+    row(K, "coded size", `${await track.getCodedWidth()}×${await track.getCodedHeight()}`);
+    row(K, "rotation", await track.getRotation());
+    const cs = await track.getColorSpace();
+    row(K, "colour space", `${cs.primaries ?? "?"} / ${cs.transfer ?? "?"} / ${cs.matrix ?? "?"} / full range ${cs.fullRange ?? "?"}`);
+    const canDec = await track.canDecode();
+    row(K, "can decode", canDec, canDec ? "ok" : "bad");
+
+    status("Reading packet timestamps…");
+    const ts = await packetTimestamps(track);
+    const fr = frameRateFrom(ts);
+    row(K, "frames (packets)", ts.length);
+    row(K, "frame rate (median delta)", +fr.fps.toFixed(3));
+    row(K, "first timestamp (s)", ts[0]);
+    row(K, "duration (s)", +(ts.at(-1) - ts[0] + fr.medianDelta).toFixed(3));
+    row(K, "worst delta deviation", (fr.worstDeviation * 100).toFixed(3) + " %", fr.cfr ? "ok" : "bad");
+
+    const problems = [];
+    if (!/mp4|quicktime|mov/i.test(fmtName)) problems.push(`The container is ${fmtName}. Render the shot from Resolve as H.264 MP4 and open that.`);
+    const desc = describeCodec(codec, await track.getCodecParameterString());
+    if (codec !== "avc" || desc.bits !== 8) problems.push(`This file is ${desc.label}. Render the shot from Resolve as H.264 8-bit and open that.`);
+    if (w > 3840 || h > 2160) problems.push(`The frame is ${w}×${h}. The maximum is 3840×2160; render at UHD or smaller.`);
+    if (!fr.cfr) problems.push("The frame rate is variable. Render from Resolve with a constant frame rate.");
+    row(K, "validation (M1 preview)", problems.length ? problems.join(" ") : "accepted", problems.length ? "bad" : "ok");
+  } finally { input.dispose(); }
+}
+
+// Human name + bit depth from the codec string, for error messages.
+function describeCodec(codec, str) {
+  const names = { avc: "H.264", hevc: "HEVC", vp8: "VP8", vp9: "VP9", av1: "AV1", prores: "ProRes" };
+  let bits = null;
+  if (codec === "avc" && str) bits = [0x6e, 0x7a, 0xf4].includes(parseInt(str.slice(5, 7), 16)) ? 10 : 8;
+  if (codec === "hevc" && str) bits = /^(hev1|hvc1)\.A?2\./.test(str) ? 10 : /^(hev1|hvc1)\.A?1\./.test(str) ? 8 : null;
+  if (codec === "vp9" && str) bits = +str.split(".")[3] || null;
+  if (codec === "av1" && str) bits = +str.split(".")[3] || null;
+  const label = (names[codec] ?? codec ?? "an unknown codec") + (bits ? ` ${bits}-bit` : "");
+  return { label, bits };
+}
+
+/* ---------------- 3 · full-speed decode ---------------- */
+async function testDecode() {
+  const K = "decode";
+  const { input, track } = await openClip();
+  try {
+    const expected = R.clip?.["frames (packets)"] ?? (await track.computePacketStats()).packetCount;
+    const sink = new VideoSampleSink(track);
+    const heap0 = heapMB(); let heapPeak = heap0 ?? 0;
+    let n = 0, last = -Infinity, ordered = true, w = 0, h = 0;
+    const t0 = performance.now(); let tFirst = 0;
+    for await (const s of sink.samples()) {
+      try {
+        if (!n) { tFirst = performance.now() - t0; w = s.displayWidth; h = s.displayHeight; }
+        if (s.timestamp <= last) ordered = false;
+        last = s.timestamp; n++;
+      } finally { s.close(); }
+      if (n % 30 === 0) {
+        const el = (performance.now() - t0) / 1000;
+        status(`Decoding… ${n} / ${expected} frames · ${(n / el).toFixed(1)} fps`, n / expected);
+        if (heap0 != null) heapPeak = Math.max(heapPeak, heapMB());
+      }
+      if (cancelled) break;
+    }
+    const sec = (performance.now() - t0) / 1000;
+    row(K, "decoded size", `${w}×${h}`);
+    row(K, "frames decoded", n, n === expected || cancelled ? "ok" : "bad");
+    row(K, "frames expected (packets)", expected);
+    row(K, "presentation order monotonic", ordered, ordered ? "ok" : "bad");
+    row(K, "time to first frame (ms)", tFirst);
+    row(K, "decode fps", n / sec, "ok");
+    row(K, "wall time (s)", sec);
+    if (heap0 != null) row(K, "JS heap start / peak (MB)", `${heap0.toFixed(0)} / ${heapPeak.toFixed(0)}`);
+  } finally { input.dispose(); }
+}
+
+/* ---------------- 4/5 · YOLO ---------------- */
+async function loadModel() {
+  if (modelBytes) return modelBytes;
+  status("Loading models/yolov8n.onnx…");
+  const r = await fetch(MODEL_URL);
+  if (!r.ok) throw new Error(`Could not load ${MODEL_URL} (HTTP ${r.status}). Put yolov8n.onnx in the models folder — see README.`);
+  return modelBytes = new Uint8Array(await r.arrayBuffer());
+}
+
+async function testYolo(ep) {
+  const K = ep === "webgpu" ? "yoloWebgpu" : "yoloWasm";
+  if (ep === "webgpu" && !navigator.gpu) throw new Error("WebGPU is not available in this browser, so only the WASM fallback can run.");
+  const bytes = await loadModel();
+  if (ep === "wasm") {
+    ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(8, navigator.hardwareConcurrency || 4) : 1;
+    row(K, "WASM threads", ort.env.wasm.numThreads, ort.env.wasm.numThreads > 1 ? "ok" : "warn");
+    if (!self.crossOriginIsolated)
+      row(K, "note", "Page is not cross-origin isolated (python http.server and GitHub Pages don't send COOP/COEP), so WASM runs on one thread. This is the fallback number the app would actually get.", "warn");
+  }
+  status(`Creating ${ep} session…`);
+  const tc = performance.now();
+  const session = await ort.InferenceSession.create(bytes, { executionProviders: [ep], graphOptimizationLevel: "all" });
+  row(K, "session create (ms)", performance.now() - tc);
+  try {
+    if (ep === "webgpu") {
+      const i = ort.env.webgpu.adapter?.info;
+      if (i) row(K, "adapter used by onnxruntime", [i.vendor, i.architecture, i.device, i.description].filter(Boolean).join(" · ") || "(hidden)");
+    }
+    row(K, "input / output names", `${session.inputNames.join(",")} → ${session.outputNames.join(",")}`);
+    const inName = session.inputNames[0], outName = session.outputNames[0];
+
+    // (a) inference only
+    const warm = 10, runs = ep === "webgpu" ? 200 : 50;
+    const buf = new Float32Array(3 * YOLO * YOLO);
+    for (let i = 0; i < buf.length; i++) buf[i] = ((i * 2654435761) >>> 24) / 255;
+    const feed = { [inName]: new ort.Tensor("float32", buf, [1, 3, YOLO, YOLO]) };
+    let outDims = null;
+    for (let i = 0; i < warm && !cancelled; i++) {
+      const o = await session.run(feed); outDims ??= o[outName].dims; o[outName].dispose?.();
+      status(`${ep}: warm-up ${i + 1}/${warm}`, (i + 1) / warm);
+    }
+    row(K, "output shape", `[${outDims?.join(", ")}]`, outDims?.join() === "1,84,8400" ? "ok" : "bad");
+    const times = [];
+    for (let i = 0; i < runs && !cancelled; i++) {
+      const t = performance.now(); const o = await session.run(feed); times.push(performance.now() - t);
+      o[outName].dispose?.();
+      if (i % 10 === 0) status(`${ep}: inference ${i + 1}/${runs}`, (i + 1) / runs);
+    }
+    const tot = times.reduce((a, b) => a + b, 0);
+    row(K, "inference only: runs", times.length);
+    row(K, "inference only: median ms", median(times));
+    row(K, "inference only: fps", times.length * 1000 / tot, "ok");
+
+    // (b) end to end on real frames
+    if (!file) { row(K, "end-to-end", "skipped — no clip loaded", "warn"); return; }
+    if (cancelled) return;
+    const { input, track } = await openClip();
+    try {
+      const cv = new OffscreenCanvas(YOLO, YOLO), cx = cv.getContext("2d");
+      const nchw = new Float32Array(3 * YOLO * YOLO), P = YOLO * YOLO;
+      const total = R.clip?.["frames (packets)"] ?? Infinity;
+      const limit = Math.min(total, ep === "webgpu" ? E2E_FRAMES : 60);
+      const tPrep = [], tInf = [], tPost = [];
+      let n = 0, withPerson = 0, persons = 0, lastBoxes = null;
+      const t0 = performance.now();
+      for await (const s of new VideoSampleSink(track).samples()) {
+        let ta = performance.now();
+        try {
+          const sc = Math.min(YOLO / s.displayWidth, YOLO / s.displayHeight);
+          const dw = Math.round(s.displayWidth * sc), dh = Math.round(s.displayHeight * sc);
+          const dx = (YOLO - dw) >> 1, dy = (YOLO - dh) >> 1;
+          cx.fillStyle = "rgb(114,114,114)"; cx.fillRect(0, 0, YOLO, YOLO);
+          s.draw(cx, dx, dy, dw, dh);
+          const px = cx.getImageData(0, 0, YOLO, YOLO).data; // 640² proxy, not 4K
+          for (let i = 0, j = 0; i < P; i++, j += 4) {
+            nchw[i] = px[j] / 255; nchw[i + P] = px[j + 1] / 255; nchw[i + 2 * P] = px[j + 2] / 255;
+          }
+          let tb = performance.now(); tPrep.push(tb - ta);
+          const o = await session.run({ [inName]: new ort.Tensor("float32", nchw, [1, 3, YOLO, YOLO]) });
+          const out = o[outName].data;
+          let tcc = performance.now(); tInf.push(tcc - tb);
+          const boxes = decodePersons(out, 8400, sc, dx, dy, s.displayWidth, s.displayHeight);
+          o[outName].dispose?.();
+          tPost.push(performance.now() - tcc);
+          lastBoxes = boxes;
+          if (boxes.length) withPerson++;
+          persons += boxes.length;
+        } finally { s.close(); }
+        n++;
+        if (n % 10 === 0) status(`${ep}: end-to-end ${n}/${limit} frames · ${(n * 1000 / (performance.now() - t0)).toFixed(1)} fps`, n / limit);
+        if (n >= limit || cancelled) break;
+      }
+      const sec = (performance.now() - t0) / 1000;
+      row(K, "end-to-end: frames", n);
+      row(K, "end-to-end: fps (decode+prep+infer+NMS)", n / sec, "ok");
+      row(K, "end-to-end: median prep ms (draw 640, read, NCHW)", median(tPrep));
+      row(K, "end-to-end: median infer ms", median(tInf));
+      row(K, "end-to-end: median output decode + NMS ms", median(tPost));
+      if (lastBoxes) row(K, "last frame boxes (x,y,w,h norm)", lastBoxes.map(b => b.slice(0, 4).map(v => v.toFixed(3)).join(",")).join("  ") || "none");
+      row(K, "frames with ≥1 person", `${withPerson} / ${n}`);
+      row(K, "mean persons per frame", n ? persons / n : 0);
+    } finally { input.dispose(); }
+  } finally { await session.release(); }
+}
+
+// [1,84,8400] channel-major: rows 0-3 = cx,cy,w,h (640 space), row 4 = person score.
+function decodePersons(d, N, sc, dx, dy, W, H) {
+  const c = [];
+  for (let i = 0; i < N; i++) {
+    const conf = d[4 * N + i];
+    if (conf < CONF) continue;
+    const bw = d[2 * N + i], bh = d[3 * N + i];
+    const x = (d[i] - bw / 2 - dx) / sc, y = (d[N + i] - bh / 2 - dy) / sc;
+    c.push([x / W, y / H, bw / sc / W, bh / sc / H, conf]);
+  }
+  c.sort((a, b) => b[4] - a[4]);
+  const keep = [];
+  for (const b of c) if (keep.every(k => iou(k, b) < NMS_IOU)) keep.push(b);
+  return keep;
+}
+function iou(a, b) {
+  const x0 = Math.max(a[0], b[0]), y0 = Math.max(a[1], b[1]);
+  const x1 = Math.min(a[0] + a[2], b[0] + b[2]), y1 = Math.min(a[1] + a[3], b[1] + b[3]);
+  const i = Math.max(0, x1 - x0) * Math.max(0, y1 - y0);
+  return i / (a[2] * a[3] + b[2] * b[3] - i || 1);
+}
+
+/* ---------------- 6 · 4K encode ---------------- */
+function countingStream(fileStream) {
+  const st = { bytes: 0, end: 0 };
+  const ws = new WritableStream({
+    async write(chunk) {
+      st.bytes += chunk.data.byteLength;
+      st.end = Math.max(st.end, chunk.position + chunk.data.byteLength);
+      if (fileStream) await fileStream.write({ type: "write", position: chunk.position, data: chunk.data });
+    },
+    async close() { if (fileStream) await fileStream.close(); },
+    async abort() { if (fileStream) await fileStream.abort(); },
+  });
+  return { ws, st };
+}
+
+async function makeEncoder({ width, height, fps, fileStream }) {
+  const codec = codecFor(fps);
+  const bitrate = Math.round(0.35 * width * height * fps);
+  // Some browsers refuse prefer-hardware outright; fall back rather than fail.
+  let accel = null;
+  for (const hw of ["prefer-hardware", "no-preference"]) {
+    const { supported } = await VideoEncoder.isConfigSupported(
+      { codec, width, height, bitrate, framerate: fps, hardwareAcceleration: hw }).catch(() => ({}));
+    if (supported) { accel = hw; break; }
+  }
+  if (!accel) throw new Error(`This browser can't encode H.264 ${codec} at ${width}×${height}. Use current Chrome or Edge.`);
+  const { ws, st } = countingStream(fileStream);
+  const output = new Output({
+    format: new Mp4OutputFormat({ fastStart: false }), // never hold the file in RAM
+    target: new StreamTarget(ws, { chunked: true }),
+  });
+  const enc = { packets: 0, config: null };
+  const source = new VideoSampleSource({
+    codec: "avc", fullCodecString: codec, bitrate, keyFrameInterval: 1,
+    hardwareAcceleration: accel,
+    onEncodedPacket: () => { enc.packets++; },
+    onEncoderConfig: cfg => { enc.config = cfg; },
+  });
+  output.addVideoTrack(source, { frameRate: fps });
+  await output.start();
+  return { output, source, st, enc, codec, bitrate, accel };
+}
+
+async function testEncode() {
+  const K = "encode";
+  if (!("VideoEncoder" in window)) throw new Error("WebCodecs VideoEncoder is missing. Use current Chrome or Edge.");
+  const clipFps = R.clip?.["frame rate (median delta)"];
+
+  // (a) encode only: synthetic 4K canvas
+  {
+    const W = 3840, H = 2160, fps = clipFps || 24;
+    const cv = new OffscreenCanvas(W, H), cx = cv.getContext("2d");
+    const e = await makeEncoder({ width: W, height: H, fps });
+    row(K, "codec string / bitrate (Mbps)", `${e.codec} / ${(e.bitrate / 1e6).toFixed(1)}`);
+    row(K, "hardware acceleration used", e.accel, e.accel === "prefer-hardware" ? "ok" : "warn");
+    let n = 0;
+    const t0 = performance.now();
+    try {
+      for (; n < SYNTH_FRAMES && !cancelled; n++) {
+        const g = cx.createLinearGradient(0, 0, W, H);
+        g.addColorStop(0, `hsl(${n * 3 % 360} 60% 40%)`); g.addColorStop(1, `hsl(${(n * 3 + 180) % 360} 60% 20%)`);
+        cx.fillStyle = g; cx.fillRect(0, 0, W, H);
+        cx.fillStyle = "#eee";
+        for (let k = 0; k < 40; k++) cx.fillRect((k * 97 + n * 13) % W, (k * 53 + n * 7) % H, 120, 80); // motion
+        const s = new VideoSample(cv, { timestamp: n / fps, duration: 1 / fps });
+        try { await e.source.add(s); } finally { s.close(); }
+        if (n % 10 === 0) status(`Encode only (synthetic 4K): ${n}/${SYNTH_FRAMES}`, n / SYNTH_FRAMES);
+      }
+      if (cancelled) { await e.output.cancel(); return; }
+      await e.output.finalize();
+    } catch (err) { await e.output.cancel().catch(() => {}); throw err; }
+    const sec = (performance.now() - t0) / 1000;
+    row(K, "encoder config accepted", e.enc.config ? `${e.enc.config.codec} ${e.enc.config.width}×${e.enc.config.height} ${e.enc.config.hardwareAcceleration}` : "n/a");
+    row(K, "encode only: frames in / packets out", `${n} / ${e.enc.packets}`, n === e.enc.packets ? "ok" : "bad");
+    row(K, "encode only (synthetic 3840×2160): fps", n / sec, "ok");
+    row(K, "encode only: output MB", e.st.end / 2 ** 20);
+  }
+
+  // (b) decode → 4K canvas → encode (the export pipeline shape, minus WebGL)
+  if (!file) { row(K, "transcode", "skipped — no clip loaded", "warn"); return; }
+  if (cancelled) return;
+  let fileStream = null;
+  if ($("toDisk").checked) {
+    const h = await showSaveFilePicker({ suggestedName: file.name.replace(/\.\w+$/, "") + "_spike.mp4",
+      types: [{ description: "MP4 video", accept: { "video/mp4": [".mp4"] } }] });
+    fileStream = await h.createWritable();
+  }
+  const { input, track } = await openClip();
+  try {
+    const W = await track.getDisplayWidth(), H = await track.getDisplayHeight();
+    const fps = clipFps || (await track.computePacketStats(120)).averagePacketRate;
+    const expected = R.clip?.["frames (packets)"] ?? (await track.computePacketStats()).packetCount;
+    const cv = new OffscreenCanvas(W, H), cx = cv.getContext("2d");
+    const e = await makeEncoder({ width: W, height: H, fps, fileStream });
+    const heap0 = heapMB(); let heapPeak = heap0 ?? 0;
+    let n = 0;
+    const t0 = performance.now();
+    try {
+      for await (const s of new VideoSampleSink(track).samples()) {
+        let out;
+        try {
+          s.draw(cx, 0, 0, W, H);
+          cx.fillStyle = "#fff"; cx.font = `${Math.round(H * 0.08)}px sans-serif`;
+          cx.fillText(String(n), H * 0.05, H * 0.12); // stand-in for the overlay pass
+          out = new VideoSample(cv, { timestamp: s.timestamp, duration: s.duration });
+        } finally { s.close(); }
+        try { await e.source.add(out); } finally { out.close(); }
+        n++;
+        if (n % 15 === 0) {
+          const el = (performance.now() - t0) / 1000;
+          status(`Transcode ${W}×${H}: ${n}/${expected} · ${(n / el).toFixed(1)} fps`, n / expected);
+          if (heap0 != null) heapPeak = Math.max(heapPeak, heapMB());
+        }
+        if (cancelled) break;
+      }
+      if (cancelled) { await e.output.cancel(); return; }
+      status("Finalizing…");
+      await e.output.finalize();
+    } catch (err) { await e.output.cancel().catch(() => {}); throw err; }
+    const sec = (performance.now() - t0) / 1000;
+    row(K, `transcode ${W}×${H}: frames in / packets out`, `${n} / ${e.enc.packets}`, n === e.enc.packets && n === expected ? "ok" : "bad");
+    row(K, "transcode (decode → canvas → encode): fps", n / sec, "ok");
+    row(K, "transcode: output MB", e.st.end / 2 ** 20);
+    row(K, "transcode: saved to disk", !!fileStream);
+    if (heap0 != null) row(K, "transcode: JS heap start / peak (MB)", `${heap0.toFixed(0)} / ${heapPeak.toFixed(0)}`);
+  } finally { input.dispose(); }
+}
+
+status("Ready. Open a clip, then Run all. Tests 1, 4a, 5a and 6a also run without a clip.");
+</script>
+</body>
+</html>
