@@ -165,6 +165,13 @@ export class Renderer {
     return {
       width: W, height: H,
       rect: (x, y, w, h, col) => this.#quad(x, y, w, h, -1, -1, -1, -1, col),
+      strokeRect: (x, y, w, h, lw, col) => {
+        this.#quad(x, y, w, lw, -1, -1, -1, -1, col);
+        this.#quad(x, y + h - lw, w, lw, -1, -1, -1, -1, col);
+        this.#quad(x, y + lw, lw, h - 2 * lw, -1, -1, -1, -1, col);
+        this.#quad(x + w - lw, y + lw, lw, h - 2 * lw, -1, -1, -1, -1, col);
+      },
+      line: (x0, y0, x1, y1, lw, col) => this.#line(x0, y0, x1, y1, lw, col),
       text: (str, x, y, px, col) => this.#text(str, x, y, px, col),
       textWidth: (str, px) => textWidth(this.#atlas(px).atlas, str),
     };
@@ -208,6 +215,19 @@ export class Renderer {
     this.#flush();
     this.gl.bindTexture(this.gl.TEXTURE_2D, tex);
     this.boundAtlas = tex;
+  }
+
+  // A line as a rotated quad (two triangles).
+  #line(x0, y0, x1, y1, lw, [r, g, b, a]) {
+    const dx = x1 - x0, dy = y1 - y0, len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len * lw / 2, ny = dx / len * lw / 2;
+    if ((this.count + 6) * FLOATS_PER_VERTEX > this.verts.length) this.#flush();
+    const v = this.verts;
+    let k = this.count * FLOATS_PER_VERTEX;
+    const put = (px, py) => { v[k++] = px; v[k++] = py; v[k++] = -1; v[k++] = -1; v[k++] = r; v[k++] = g; v[k++] = b; v[k++] = a; };
+    put(x0 + nx, y0 + ny); put(x1 + nx, y1 + ny); put(x0 - nx, y0 - ny);
+    put(x0 - nx, y0 - ny); put(x1 + nx, y1 + ny); put(x1 - nx, y1 - ny);
+    this.count += 6;
   }
 
   #quad(x, y, w, h, u0, v0, u1, v1, [r, g, b, a]) {

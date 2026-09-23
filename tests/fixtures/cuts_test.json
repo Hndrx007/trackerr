@@ -1,0 +1,72 @@
+{
+  "clip": "cuts_test.mp4",
+  "frames": 300,
+  "fps": [
+    24,
+    1
+  ],
+  "cuts": [
+    40,
+    84,
+    86,
+    122,
+    174,
+    204,
+    206,
+    236,
+    260
+  ],
+  "flashFrames": [
+    60
+  ],
+  "strobe": [
+    132,
+    162
+  ],
+  "whipPan": [
+    174,
+    203
+  ],
+  "shots": {
+    "zidane pan": [
+      0,
+      39
+    ],
+    "bus pan, flash frame at +20": [
+      40,
+      83
+    ],
+    "mandelbrot, 2-frame shot": [
+      84,
+      85
+    ],
+    "zidane close-up": [
+      86,
+      121
+    ],
+    "bus: strobe on every other frame from +10 to +40": [
+      122,
+      173
+    ],
+    "zidane whip pan (fast, no cut)": [
+      174,
+      203
+    ],
+    "cellauto, 2-frame insert": [
+      204,
+      205
+    ],
+    "zidane whip pan, continued after the insert": [
+      206,
+      235
+    ],
+    "smptebars": [
+      236,
+      259
+    ],
+    "bus wide": [
+      260,
+      299
+    ]
+  }
+}

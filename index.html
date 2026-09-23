@@ -14,6 +14,7 @@
   <span class="clip-info" id="clipInfo"></span>
   <span class="spacer"></span>
   <button class="sys" id="sys" popovertarget="envPanel"><span class="dot" id="sysDot"></span><span id="sysText">Checking browser…</span></button>
+  <button id="analyse" disabled>Analyse</button>
   <button class="primary" id="export" disabled>Export clip</button>
 </header>
 
@@ -34,6 +35,30 @@
       <dl id="clipDetails"><dt>No clip open</dt><dd></dd></dl>
     </section>
     <section>
+      <h3>Analysis</h3>
+      <dl id="analysisDetails"><dt>Not analysed</dt><dd></dd></dl>
+      <div class="row">
+        <button id="saveTracks" disabled>Save track data</button>
+        <button id="loadTracks" disabled>Load…</button>
+      </div>
+      <p class="note" id="analysisNote"></p>
+    </section>
+    <section id="debugSection">
+      <h3>Debug overlay</h3>
+      <label class="check"><input type="checkbox" data-debug="persons" checked> People (tracked, with IDs)</label>
+      <label class="check"><input type="checkbox" data-debug="detections" checked> Raw detections</label>
+      <label class="check"><input type="checkbox" data-debug="swarm" checked> Swarm points</label>
+      <label class="check"><input type="checkbox" data-debug="clusters"> Cluster candidates</label>
+      <label class="check"><input type="checkbox" data-debug="info" checked> Shot and cut signal readout</label>
+      <label class="check"><input type="checkbox" id="showGraph" checked> Cut signal graph</label>
+    </section>
+    <section id="cutSection">
+      <h3>Cuts</h3>
+      <p class="note"><kbd>[</kbd> <kbd>]</kbd> previous / next cut · <kbd>C</kbd> add a cut at the playhead · click a marker, then <kbd>Delete</kbd> to remove it</p>
+      <dl id="cutStats"></dl>
+      <div class="row"><button id="copyCuts" disabled>Copy cut report</button></div>
+    </section>
+    <section>
       <h3>Export</h3>
       <div class="row">
         <label for="bitrate">Bitrate</label>
@@ -45,7 +70,7 @@
     </section>
     <section>
       <h3>Overlay</h3>
-      <p class="note">M1 test overlay: each frame shows its frame number, plus a marker strip the export check reads back. The HUD look replaces it in M3.</p>
+      <p class="note">The export burns in each frame's number plus a marker strip the export check reads back (M1 test overlay). The HUD look replaces it in M3. After analysis the viewer shows the debug overlay instead.</p>
     </section>
   </aside>
 </div>
@@ -58,7 +83,11 @@
     <button data-next title="Next frame (→), 1 s on (Shift+→)" disabled>▶</button>
   </span>
   <span></span>
-  <input type="range" data-scrub min="0" max="0" value="0" disabled aria-label="Frame">
+  <div class="lanes">
+    <div class="markers" data-markers></div>
+    <input type="range" data-scrub min="0" max="0" value="0" disabled aria-label="Frame">
+    <canvas class="graph" data-graph hidden title="Cut signal: bars are d(i), the line is the live threshold. Click to seek."></canvas>
+  </div>
 </footer>
 
 <div popover id="envPanel"><ul id="envList"></ul></div>

@@ -1,5 +1,4 @@
-// App state machine and wiring. States: empty → loading → ready → exporting → ready.
-// (Analysing arrives in M2.)
+// App state machine and wiring. States: empty → loading → ready ⇄ analysing / exporting.
 import { checkEnvironment, defaultBitrate } from "./env.js";
 import { openSource, fpsLabel } from "./media.js";
 import { exportClip, verifyExport, assertCanExport } from "./export.js";
@@ -7,23 +6,36 @@ import { drawBurnIn } from "./render/burnin.js";
 import { Viewer } from "./ui/viewer.js";
 import { Timeline, timecode } from "./ui/timeline.js";
 import { UserError, isAbort } from "./errors.js";
+import { analyse, rebuildDerived } from "./analysis/client.js";
+import { serialize, parse, mismatches, cutFrames, shotsOf } from "./trackdata.js";
+import { drawDebug, DEBUG_DEFAULTS } from "./render/debug.js";
 
 const $ = id => document.getElementById(id);
 
 const state = {
-  phase: "empty",       // empty | loading | ready | exporting
+  phase: "empty",       // empty | loading | ready | analysing | exporting
   env: null,
   source: null,         // { input, track, info, dispose }
+  file: null,           // the source File, handed to the analysis worker
   handle: null,         // FileSystemFileHandle of the source, when the browser gives one
   bitrate: null,        // bits per second
+  td: null,             // track data, once analysed or loaded
+  tdSavedAs: null,
+  debug: { ...DEBUG_DEFAULTS },
+  debugCache: {},
+  showGraph: true,
 };
 
-// The M1 overlay. M3 replaces this with the composed HUD.
+// The export overlay: M1's burn-in until M3 replaces it with the composed HUD.
 const overlay = drawBurnIn;
+// The viewer shows the export's overlay until there's track data, then the analysis debug view.
+const viewOverlay = (o, i) => state.td ? drawDebug(o, i, state.td, state.debug, state.debugCache) : overlay(o, i);
 
-const viewer = new Viewer({ stage: $("stage"), canvas: $("view"), overlay });
+const viewer = new Viewer({ stage: $("stage"), canvas: $("view"), overlay: viewOverlay });
 viewer.onError = e => showError(e, "Couldn't show that frame");
-const timeline = new Timeline({ root: $("transport"), onSeek: i => viewer.show(i) });
+const timeline = new Timeline({ root: $("transport"), onSeek: i => viewer.show(i), onSelectCut: () => render() });
+// For inspection from DevTools: heroTracker.state.td is the current track data.
+globalThis.heroTracker = { state, viewer, timeline };
 
 /* ---------------- environment ---------------- */
 
@@ -95,10 +107,15 @@ async function load(file, handle) {
     const source = await openSource(file);
     previous?.dispose();
     state.source = source;
+    state.file = file;
     state.handle = handle;
+    state.td = null;
+    state.tdSavedAs = null;
+    state.debugCache = {};
     state.bitrate = defaultBitrate(source.info.width, source.info.height, source.info.fps);
     viewer.setSource(source);
     timeline.setClip(source.info);
+    syncTimeline();
     viewer.show(0);
     setPhase("ready");
   } catch (e) {
@@ -180,6 +197,180 @@ async function runExport() {
   dlg.done(report.pass ? "Export verified" : "Export failed its check", summary, report.pass ? "ok" : "bad", report.checks);
 }
 
+/* ---------------- analysis ---------------- */
+
+$("analyse").onclick = () => runAnalyse().catch(e => showError(e, "Analysis stopped"));
+
+async function runAnalyse() {
+  const { source, file } = state;
+  if (!source || state.phase !== "ready") return;
+  const dlg = openDialog("Analysing");
+  const ac = new AbortController();
+  dlg.onCancel = () => ac.abort();
+  setPhase("analysing");
+  const { info } = source;
+  const lines = [`${info.name} · ${info.frameCount.toLocaleString("en-US")} frames`];
+  dlg.body(lines[0]);
+  let td;
+  try {
+    td = await analyse(file, info, {
+      previous: state.td, signal: ac.signal,
+      onStatus: t => dlg.stats(t),
+      onBackend: b => {
+        lines.push(b.backend === "webgpu" ? `Person detection on the GPU (WebGPU${b.adapter ? ", " + b.adapter : ""})` : "Person detection on the CPU (WASM): slower");
+        if (b.warning) lines.push(b.warning);
+        dlg.body(lines.join("\n"));
+      },
+      onProgress: ({ done, total, fps, eta, shots }) => {
+        dlg.progress(done / total);
+        dlg.stats(`frame ${done.toLocaleString("en-US")} of ${total.toLocaleString("en-US")} · ${fps.toFixed(1)} fps · ${formatDuration(eta)} left · ${shots} shots`);
+      },
+    });
+  } catch (e) {
+    setPhase("ready");
+    if (isAbort(e)) dlg.done("Analysis cancelled", state.td ? "The previous analysis is still loaded." : "Nothing was changed.", "warn");
+    else { dlg.close(); showError(e, "Analysis stopped"); }
+    return;
+  }
+  state.td = td;
+  state.tdSavedAs = null;
+  state.debugCache = {};
+  setPhase("ready");
+  syncTimeline();
+  viewer.draw();
+  const a = td.analysis;
+  dlg.done("Analysis finished",
+    `${shotsOf(td).length} shots · ${Object.keys(td.persons).length} person tracks · ${Object.keys(td.swarm).length.toLocaleString("en-US")} swarm points · ${a.fps.toFixed(1)} fps, ${formatDuration(a.seconds)}`,
+    "ok", a.warning ? [{ name: "Detection ran on the CPU", pass: false, level: "warn", detail: a.warning }] : []);
+}
+
+/* ---------------- track data: save and load ---------------- */
+
+$("saveTracks").onclick = () => saveTracks().catch(e => showError(e, "Couldn't save the track data"));
+$("loadTracks").onclick = () => loadTracks().catch(e => showError(e, "Couldn't load the track data"));
+
+async function saveTracks() {
+  if (!state.td) return;
+  const base = state.source.info.name.replace(/\.[^.]+$/, "");
+  let handle;
+  try {
+    handle = await showSaveFilePicker({ suggestedName: `${base}.tracks.json`, types: [{ description: "Track data", accept: { "application/json": [".json"] } }] });
+  } catch (e) { if (isAbort(e)) return; throw e; }
+  const w = await handle.createWritable();
+  await w.write(serialize(state.td));
+  await w.close();
+  state.tdSavedAs = handle.name;
+  render();
+}
+
+async function loadTracks() {
+  if (!state.source) return;
+  let handle;
+  try {
+    [handle] = await showOpenFilePicker({ types: [{ description: "Track data", accept: { "application/json": [".json"] } }] });
+  } catch (e) { if (isAbort(e)) return; throw e; }
+  let td;
+  try { td = parse(await (await handle.getFile()).text()); }
+  catch { throw new UserError(`${handle.name} isn't track data saved by this tool. Choose a .tracks.json file saved with “Save track data”.`); }
+  const diff = mismatches(td, state.source.info);
+  const fatal = diff.filter(d => d.fatal);
+  if (fatal.length)
+    throw new UserError(`This track data belongs to a different clip (${fatal.map(d => `${d.field}: saved ${d.saved}, open clip ${d.open}`).join("; ")}). Open ${td.source.name} first, or analyse this clip.`);
+  state.td = td;
+  state.tdSavedAs = handle.name;
+  state.debugCache = {};
+  syncTimeline();
+  viewer.draw();
+  render();
+  if (diff.length)
+    openDialog("Loaded, with a warning").done("Loaded, with a warning",
+      `The track data was saved for a file that differs from the open one (${diff.map(d => `${d.field}: saved ${d.saved}, open ${d.open}`).join("; ")}). The frame count matches, so it has been loaded. If the clip was re-rendered, analyse it again.`, "warn");
+}
+
+/* ---------------- cuts: markers, editing, accuracy ---------------- */
+
+function cutMarkers(td) {
+  if (!td) return [];
+  const removed = new Set(td.cutsRemoved);
+  return td.cuts.map(c => ({ frame: c.frame, origin: c.origin, removed: c.origin === "auto" && removed.has(c.frame) }));
+}
+
+function syncTimeline() {
+  const td = state.td;
+  timeline.setCuts(cutMarkers(td));
+  timeline.setSignal(td && state.showGraph ? { d: td.cutSignal, threshold: td.cutThreshold, flash: td.cutFlash } : null);
+}
+
+function afterCutEdit() {
+  rebuildDerived(state.td);   // person tracks and clusters follow the new cuts at once
+  state.td.edited = true;
+  state.debugCache = {};
+  syncTimeline();
+  viewer.draw();
+  render();
+}
+
+function addCut(f) {
+  const td = state.td;
+  if (!td || f <= 0) return;
+  if (td.cutsRemoved.includes(f)) td.cutsRemoved = td.cutsRemoved.filter(x => x !== f);   // restore an auto cut
+  else if (!td.cuts.some(c => c.frame === f)) {
+    td.cuts.push({ frame: f, origin: "manual" });
+    td.cuts.sort((a, b) => a.frame - b.frame);
+  } else return;
+  timeline.select(f);
+  afterCutEdit();
+}
+
+function removeCut(f) {
+  const td = state.td, c = td?.cuts.find(c => c.frame === f);
+  if (!c) return;
+  if (c.origin === "manual") td.cuts = td.cuts.filter(x => x !== c);
+  else if (!td.cutsRemoved.includes(f)) td.cutsRemoved.push(f);
+  else return;
+  afterCutEdit();
+}
+
+function jumpCut(dir) {
+  if (!state.td) return;
+  const cuts = cutFrames(state.td), i = timeline.index;
+  const f = dir < 0 ? [...cuts].reverse().find(c => c < i) : cuts.find(c => c > i);
+  if (f === undefined) return;
+  timeline.select(f);
+  timeline.seek(f);
+}
+
+/** Accuracy of the automatic cuts against the editor's corrections. */
+function cutReport(td) {
+  const auto = td.cuts.filter(c => c.origin === "auto").map(c => c.frame);
+  const removed = auto.filter(f => td.cutsRemoved.includes(f));
+  const added = td.cuts.filter(c => c.origin === "manual").map(c => c.frame);
+  const kept = auto.length - removed.length;
+  return {
+    clip: td.source.name, frames: td.source.frameCount,
+    autoCuts: auto.length, falseCuts: removed, missedCuts: added,
+    precision: auto.length ? kept / auto.length : 1,
+    recall: kept + added.length ? kept / (kept + added.length) : 1,
+    settings: td.analysis?.cut,
+  };
+}
+
+$("copyCuts").onclick = async () => {
+  if (!state.td) return;
+  const text = JSON.stringify(cutReport(state.td), null, 2);
+  try {
+    await navigator.clipboard.writeText(text);
+    $("copyCuts").textContent = "Copied";
+    setTimeout(() => { $("copyCuts").textContent = "Copy cut report"; }, 1500);
+  } catch { console.log(text); }
+};
+
+document.querySelectorAll("[data-debug]").forEach(cb => cb.addEventListener("change", () => {
+  state.debug[cb.dataset.debug] = cb.checked;
+  viewer.draw();
+}));
+$("showGraph").addEventListener("change", e => { state.showGraph = e.target.checked; syncTimeline(); });
+
 /* ---------------- dialog ---------------- */
 
 function openDialog(title) {
@@ -187,7 +378,7 @@ function openDialog(title) {
   const api = {
     onCancel: null,
     title: t => { $("dlgTitle").textContent = t; },
-    body: t => { $("dlgBody").replaceChildren(Object.assign(document.createElement("p"), { textContent: t })); },
+    body: t => { $("dlgBody").replaceChildren(...t.split("\n").map(l => Object.assign(document.createElement("p"), { textContent: l }))); },
     progress: f => { $("dlgBar").style.width = (f * 100).toFixed(1) + "%"; },
     stats: t => { $("dlgStats").textContent = t; },
     close: () => d.close(),
@@ -223,7 +414,7 @@ function openDialog(title) {
   $("dlgCancel").onclick = () => { $("dlgCancel").disabled = true; api.stats("Cancelling…"); api.onCancel?.(); };
   $("dlgCancel").disabled = false;
   $("dlgClose").onclick = () => d.close();
-  d.oncancel = e => { if (state.phase === "exporting") e.preventDefault(); };  // Esc doesn't hide a running export
+  d.oncancel = e => { if (state.phase === "exporting" || state.phase === "analysing") e.preventDefault(); };  // Esc doesn't hide running work
   api.title(title);
   $("dlgBody").replaceChildren();
   d.showModal();
@@ -246,12 +437,16 @@ bitrateInput.addEventListener("dblclick", () => {
 });
 
 addEventListener("keydown", e => {
-  if (e.target.closest?.("input, textarea, dialog[open]") || state.phase !== "ready") return;
+  if (e.target.closest?.("input[type=number], textarea, dialog[open]") || state.phase !== "ready") return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
     e.preventDefault();
     timeline.step(e.key === "ArrowLeft" ? -1 : 1, e.shiftKey);
   } else if (e.key === "Home") timeline.seek(0);
   else if (e.key === "End") timeline.seek(Infinity);
+  else if (e.key === "[" || e.key === "]") jumpCut(e.key === "[" ? -1 : 1);
+  else if (e.key === "c" || e.key === "C") addCut(timeline.index);
+  else if ((e.key === "Delete" || e.key === "Backspace") && timeline.selected !== null) { e.preventDefault(); removeCut(timeline.selected); }
 });
 
 function setPhase(phase) {
@@ -263,8 +458,15 @@ function render() {
   const { source, env, phase } = state;
   const info = source?.info;
   $("drop").hidden = !!source;
-  $("open").disabled = phase === "exporting" || phase === "loading";
+  const busy = phase === "exporting" || phase === "loading" || phase === "analysing";
+  $("open").disabled = busy;
   $("export").disabled = phase !== "ready" || !env || !env.fsa || !env.webcodecs;
+  $("analyse").disabled = phase !== "ready" || !env?.webcodecs;
+  $("analyse").textContent = state.td ? "Analyse again" : "Analyse";
+  $("saveTracks").disabled = !state.td || busy;
+  $("loadTracks").disabled = !source || busy;
+  $("copyCuts").disabled = !state.td;
+  renderAnalysis();
   $("export").title = env && !env.fsa ? "This browser can't save straight to disk. Use Chrome or Edge." : "";
   bitrateInput.disabled = !source || phase === "exporting";
   if (!info) {
@@ -290,6 +492,42 @@ function render() {
     Object.assign(document.createElement("dd"), { textContent: v }),
   ]));
   if (document.activeElement !== bitrateInput) bitrateInput.value = (state.bitrate / 1e6).toFixed(1);
+}
+
+function renderAnalysis() {
+  const td = state.td;
+  const kv = rows => rows.flatMap(([k, v, cls]) => [
+    Object.assign(document.createElement("dt"), { textContent: k }),
+    Object.assign(document.createElement("dd"), { textContent: v, className: cls ?? "" }),
+  ]);
+  if (!td) {
+    $("analysisDetails").replaceChildren(Object.assign(document.createElement("dt"), { textContent: state.source ? "Not analysed yet" : "No clip open" }));
+    $("analysisNote").textContent = state.source ? "Analyse finds cuts, people and swarm points. It runs once; save the track data to skip it next time." : "";
+    $("cutStats").replaceChildren();
+    return;
+  }
+  const a = td.analysis ?? {};
+  $("analysisDetails").replaceChildren(...kv([
+    ["Detection", a.backend === "webgpu" ? "GPU (WebGPU)" : a.backend === "wasm" ? "CPU (WASM)" : "–", a.backend === "wasm" ? "warnline" : ""],
+    ["Detect every", a.detectStride > 1 ? `${a.detectStride} frames` : "frame"],
+    ["Speed", a.fps ? `${a.fps.toFixed(1)} fps · ${formatDuration(a.seconds)}` : "–"],
+    ["Shots", shotsOf(td).length.toLocaleString("en-US")],
+    ["Person tracks", Object.keys(td.persons).length.toLocaleString("en-US")],
+    ["Swarm points", Object.keys(td.swarm).length.toLocaleString("en-US")],
+    ["Cluster candidates", Object.keys(td.clusters).length.toLocaleString("en-US")],
+    ...(state.tdSavedAs ? [["Track data file", state.tdSavedAs]] : []),
+  ]));
+  $("analysisNote").textContent = td.edited
+    ? "Cut edits update person tracks at once. Swarm points in edited shots update when you analyse again (manual cuts are kept)."
+    : "";
+  const r = cutReport(td);
+  $("cutStats").replaceChildren(...kv([
+    ["Automatic cuts", r.autoCuts.toLocaleString("en-US")],
+    ["Removed as false", r.falseCuts.length.toLocaleString("en-US")],
+    ["Added as missed", r.missedCuts.length.toLocaleString("en-US")],
+    ...(r.falseCuts.length || r.missedCuts.length ? [["Precision", (r.precision * 100).toFixed(1) + "%"], ["Recall", (r.recall * 100).toFixed(1) + "%"]] : []),
+    ...(timeline.selected !== null ? [["Selected cut", `f ${timeline.selected.toLocaleString("en-US")}`]] : []),
+  ]));
 }
 
 function showError(e, title = "Something went wrong") {
