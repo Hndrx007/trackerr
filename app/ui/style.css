@@ -19,6 +19,8 @@ button, .btn {
   padding: 5px 12px; font: inherit; cursor: pointer; white-space: nowrap;
 }
 button:hover:not(:disabled) { border-color: var(--edge-hi); }
+a { color: var(--accent); }
+a.btn { color: var(--ink); text-decoration: none; }
 button.primary { border-color: var(--accent); color: var(--accent); }
 button.primary:hover:not(:disabled) { background: var(--accent); color: #111; }
 button:disabled { opacity: .4; cursor: default; }

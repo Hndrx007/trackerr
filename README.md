@@ -10,7 +10,9 @@ The full spec is in [docs/hero-tracker-spec.md](docs/hero-tracker-spec.md). Wher
 
 ## Run it
 
-It needs Chrome or Edge on Windows. For detection on the discrete GPU, set the browser to **High performance** in Windows Settings → System → Display → Graphics.
+**Hosted:** <https://hndrx007.github.io/trackerr/>. Editors start with the [quick start](help.html), which is also linked from **Help** in the app.
+
+**Locally:** it needs Chrome or Edge on Windows. For detection on the discrete GPU, set the browser to **High performance** in Windows Settings → System → Display → Graphics.
 
 ```bash
 python tools/serve.py

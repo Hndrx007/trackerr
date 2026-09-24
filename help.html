@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hero Tracker quick start</title>
+<style>
+  :root {
+    --bg: #161616; --panel: #1f1f1f; --edge: #333; --edge-hi: #444;
+    --ink: #d2d2d2; --dim: #8a8a8a; --accent: #6fa8dc; --ok: #7fbf7f; --warn: #d9b35c;
+    --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.6 system-ui, "Segoe UI", sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 40px 16px 80px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  .lede { color: var(--dim); margin: 0 0 32px; }
+  h2 { font-size: 17px; margin: 40px 0 12px; padding-top: 16px; border-top: 1px solid var(--edge); }
+  h3 { font-size: 15px; margin: 24px 0 6px; }
+  p, li { margin: 6px 0; }
+  ol.steps { padding: 0; list-style: none; counter-reset: s; }
+  ol.steps > li { counter-increment: s; position: relative; padding: 14px 16px 14px 56px; margin: 10px 0;
+    background: var(--panel); border: 1px solid var(--edge); border-radius: 6px; }
+  ol.steps > li::before { content: counter(s); position: absolute; left: 16px; top: 13px; width: 26px; height: 26px;
+    border-radius: 50%; border: 1px solid var(--accent); color: var(--accent); text-align: center; line-height: 24px; font-size: 13px; }
+  ol.steps b.t { display: block; font-size: 15px; }
+  .ui { color: #fff; font-weight: 600; }
+  kbd { font: 12px var(--mono); border: 1px solid var(--edge-hi); border-bottom-width: 2px; border-radius: 3px; padding: 0 5px; }
+  .note { color: var(--dim); font-size: 14px; }
+  .tip { border-left: 3px solid var(--warn); padding: 4px 0 4px 12px; color: var(--ink); }
+  .ok { border-left-color: var(--ok); }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  td { padding: 6px 8px; border-bottom: 1px solid var(--edge); vertical-align: top; }
+  td:first-child { white-space: nowrap; width: 1%; }
+  a { color: var(--accent); }
+  .lane { display: inline-block; width: 12px; height: 10px; border-radius: 2px; vertical-align: baseline; }
+</style>
+</head>
+<body>
+<main>
+<h1>Hero Tracker quick start</h1>
+<p class="lede">Adds the thermal hero box and tracking HUD to a graded shot, and exports a clip that lines up frame for frame in Resolve. Everything runs in your browser, and your footage never leaves your computer. <a href="./">Open the tool</a></p>
+
+<h2>Once, before you start</h2>
+<ul>
+  <li>Use <b>Chrome</b> or <b>Edge</b>. Other browsers won't work.</li>
+  <li>In Windows <b>Settings → System → Display → Graphics</b>, set your browser to <b>High performance</b>, so it uses your graphics card rather than the built-in one.</li>
+  <li>The dot at the top right of the tool shows whether your browser is ready: green means ready, and amber means click it to see the warning.</li>
+</ul>
+
+<h2>The five steps</h2>
+<ol class="steps">
+  <li><b class="t">Render from Resolve</b>
+    Render the graded section as <b>H.264</b>, MP4 or MOV, at the same resolution and frame rate as the timeline (up to 4K). Include all its cuts: the tool finds them itself.</li>
+  <li><b class="t">Open it</b>
+    Drag the file onto the tool, or click <span class="ui">Open</span>. If a message says the file won't work, it tells you what to change in the render settings.</li>
+  <li><b class="t">Analyse, then save</b>
+    Click <span class="ui">Analyse</span>. This finds the cuts, the people and the points to track, and takes a few minutes: roughly two to three times the clip's length.
+    When it's done, go to the <span class="ui">Analysis</span> tab and click <span class="ui">Save project</span>, and keep that file next to the video.
+    <p class="note">Next time: open the same video, then <span class="ui">Open project…</span> and pick the saved file. You won't have to analyse again, and your fixes and look come back too.</p></li>
+  <li><b class="t">Pick a look</b>
+    In the <span class="ui">Look</span> tab, hover over a look to preview it and click it to use it. Press <kbd>Space</kbd> to play. For most clips that's all you need to do. The sliders underneath are there if you want to fine-tune.</li>
+  <li><b class="t">Export</b>
+    Click <span class="ui">Export clip</span> and choose where to save. The tool then checks the file against the source frame by frame. <b>Export verified</b> in green means it's done.
+    <p class="note">The export has no audio. Keep the audio from your original.</p></li>
+</ol>
+
+<h2>Putting it in Resolve</h2>
+<p>The export is the full picture with the effect baked in. It has exactly the same number of frames as your render. Place it on the track above your graded section so it starts on the same frame, and it lines up frame for frame from there. It carries no timecode, so line it up by where it starts.</p>
+
+<h2>If something looks wrong</h2>
+<p class="note">All optional. Pause first (<kbd>Space</kbd>). After fixing anything, click <span class="ui">Save project</span> again.</p>
+
+<h3>The thermal box is on the wrong person, or on nobody</h3>
+<p>The strip under the scrubber shows the hero: <span class="lane" style="background:#6fa8dc"></span> blue has a hero, <span class="lane" style="background:#e08a6a"></span> red has people but no hero, and <span class="lane" style="background:#333;border:1px solid #444"></span> grey has nobody.</p>
+<ul>
+  <li><b>Click a person</b> to make them the hero from that frame on.</li>
+  <li><kbd>G</kbd> jumps to the next red stretch, so you can go through them one by one.</li>
+  <li><kbd>X</kbd> removes the hero from here on, if you don't want one in this shot.</li>
+</ul>
+
+<h3>The boxes slide across a cut</h3>
+<p>The tool missed the cut. Go to the first frame of the new shot (<kbd>←</kbd> <kbd>→</kbd> step one frame) and press <kbd>C</kbd>. To remove a cut that isn't real, click its marker above the scrubber, then press <kbd>Delete</kbd>. Only the shots next to the cut are analysed again, which takes a few seconds.</p>
+
+<h3>You want a closer look</h3>
+<p><span class="ui">Check frame</span> (bottom bar) shows the current frame at full size, exactly as it will export. Drag to move around.</p>
+
+<p class="tip">You can ignore the <span class="ui">Debug</span> view, most of the <span class="ui">Analysis</span> tab, the bitrate and <span class="ui">Burn in frame numbers</span>. They're there for testing.</p>
+
+<h2>Keys</h2>
+<table>
+  <tr><td><kbd>Space</kbd></td><td>Play / pause</td></tr>
+  <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>One frame back / on (<kbd>Shift</kbd> for one second)</td></tr>
+  <tr><td><kbd>[</kbd> <kbd>]</kbd></td><td>Previous / next cut</td></tr>
+  <tr><td><kbd>G</kbd></td><td>Next stretch with people but no hero</td></tr>
+  <tr><td>Click a person</td><td>Make them the hero</td></tr>
+  <tr><td><kbd>X</kbd></td><td>No hero from here</td></tr>
+  <tr><td><kbd>C</kbd> / <kbd>Delete</kbd></td><td>Add a cut / remove the selected cut</td></tr>
+  <tr><td>Double-click a slider</td><td>Reset it</td></tr>
+</table>
+
+<h2>Problems</h2>
+<ul>
+  <li><b>Analysis is very slow, or the dot is amber and mentions the integrated GPU:</b> redo the High performance setting above and restart the browser.</li>
+  <li><b>The tool looks different or odd after an update:</b> press <kbd>Ctrl</kbd>+<kbd>F5</kbd>.</li>
+  <li><b>Closing the tab</b> warns you if there's unsaved work. Save the project first.</li>
+</ul>
+</main>
+</body>
+</html>

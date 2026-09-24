@@ -13,6 +13,7 @@
   <input type="file" id="file" accept="video/mp4,video/quicktime,.mp4,.mov" hidden>
   <span class="clip-info" id="clipInfo"></span>
   <span class="spacer"></span>
+  <a class="btn" href="help.html" target="_blank" title="Quick start guide">Help</a>
   <button id="keysBtn" popovertarget="keysPanel" title="Keyboard shortcuts">Keys</button>
   <button class="sys" id="sys" popovertarget="envPanel"><span class="dot" id="sysDot"></span><span id="sysText">Checking browser…</span></button>
   <div class="seg" id="viewMode" role="group" aria-label="View">
@@ -29,6 +30,7 @@
       <h2>Drop a clip here, or Open</h2>
       <p>H.264 8-bit, MP4 or MOV, constant frame rate, up to 3840×2160.</p>
       <p>Render the graded shot from Resolve as H.264 and open that. The effect is baked in after the grade, so the tool only takes H.264 renders.</p>
+      <p>New to this? Read the <a href="help.html" target="_blank">quick start</a>.</p>
       <div id="dropMsg"></div>
     </div>
     <canvas id="view" hidden></canvas>
