@@ -13,6 +13,7 @@
   <input type="file" id="file" accept="video/mp4,video/quicktime,.mp4,.mov" hidden>
   <span class="clip-info" id="clipInfo"></span>
   <span class="spacer"></span>
+  <button id="keysBtn" popovertarget="keysPanel" title="Keyboard shortcuts">Keys</button>
   <button class="sys" id="sys" popovertarget="envPanel"><span class="dot" id="sysDot"></span><span id="sysText">Checking browser…</span></button>
   <div class="seg" id="viewMode" role="group" aria-label="View">
     <button data-mode="hud" aria-pressed="true" title="The look, as it will export">HUD</button>
@@ -39,7 +40,7 @@
       <button role="tab" data-tab="analysis" aria-selected="false">Analysis</button>
       <button role="tab" data-tab="clip" aria-selected="false">Clip</button>
     </nav>
-    <div class="tab" data-tab="look" id="settings"></div>
+    <div class="tab" data-tab="look"><p class="look-empty" id="lookEmpty" hidden></p><div id="settings"></div></div>
     <div class="tab" data-tab="analysis" hidden>
       <section>
         <h3>Analysis</h3>
@@ -104,6 +105,22 @@
 </footer>
 
 <div popover id="envPanel"><ul id="envList"></ul></div>
+<div popover id="keysPanel" class="keys">
+  <h3>Keyboard</h3>
+  <dl>
+    <dt><kbd>Space</kbd></dt><dd>Play / pause</dd>
+    <dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>One frame back / on</dd>
+    <dt><kbd>Shift</kbd>+<kbd>←</kbd> <kbd>→</kbd></dt><dd>One second back / on</dd>
+    <dt><kbd>Home</kbd> <kbd>End</kbd></dt><dd>First / last frame</dd>
+    <dt><kbd>[</kbd> <kbd>]</kbd></dt><dd>Previous / next cut</dd>
+    <dt><kbd>C</kbd></dt><dd>Add a cut at the playhead</dd>
+    <dt><kbd>Delete</kbd></dt><dd>Remove the selected cut marker</dd>
+    <dt><kbd>G</kbd></dt><dd>Next gap in the hero lane (people, no hero)</dd>
+    <dt><kbd>X</kbd></dt><dd>No hero from here to the end of this hero segment</dd>
+    <dt>Click a person</dt><dd>Make them the hero from this frame (while paused)</dd>
+    <dt>Double-click a slider</dt><dd>Reset it to the look's value</dd>
+  </dl>
+</div>
 
 <dialog id="exportDlg">
   <h2 id="dlgTitle">Exporting</h2>

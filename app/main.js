@@ -77,6 +77,8 @@ const panel = new Panel($("settings"), {
     viewer.draw();
   },
 });
+// Analysis takes minutes, so don't let a stray close lose it (or the editor's corrections).
+addEventListener("beforeunload", e => { if (state.dirty && state.td) e.preventDefault(); });
 // For inspection from DevTools: heroTracker.state.td is the current track data.
 globalThis.heroTracker = { state, viewer, timeline, panel };
 
@@ -347,6 +349,8 @@ async function runAnalyse() {
   try {
     td = await analyse(file, info, {
       previous: state.td, signal: ac.signal,
+      // Detect every frame on the GPU unless the editor chose otherwise; the worker uses 3 on the CPU fallback.
+      options: { conf: state.params.detectConf, ...(state.params.detectStride > 1 ? { detectStride: state.params.detectStride } : {}) },
       onStatus: t => dlg.stats(t),
       onBackend: b => {
         lines.push(b.backend === "webgpu" ? `Person detection on the GPU (WebGPU${b.adapter ? ", " + b.adapter : ""})` : "Person detection on the CPU (WASM): slower");
@@ -366,6 +370,7 @@ async function runAnalyse() {
   }
   state.td = td;
   state.tdSavedAs = null;
+  state.dirty = true;
   state.debugCache = {};
   state.clusterSmoothing = 1.5;   // what rebuildDerived used
   recompose();
@@ -373,7 +378,7 @@ async function runAnalyse() {
   syncTimeline();
   viewer.draw();
   const a = td.analysis;
-  dlg.done("Analysis finished",
+  dlg.done("Analysis finished — save the project to skip this next time",
     `${shotsOf(td).length} shots · ${Object.keys(td.persons).length} person tracks · ${Object.keys(td.swarm).length.toLocaleString("en-US")} swarm points · ${a.fps.toFixed(1)} fps, ${formatDuration(a.seconds)}`,
     "ok", a.warning ? [{ name: "Detection ran on the CPU", pass: false, level: "warn", detail: a.warning }] : []);
 }
@@ -395,6 +400,7 @@ async function saveTracks() {
   await w.write(serialize(state.td));
   await w.close();
   state.tdSavedAs = handle.name;
+  state.dirty = false;
   render();
 }
 
@@ -406,7 +412,7 @@ async function loadTracks() {
   } catch (e) { if (isAbort(e)) return; throw e; }
   let td;
   try { td = parse(await (await handle.getFile()).text()); }
-  catch { throw new UserError(`${handle.name} isn't track data saved by this tool. Choose a .tracks.json file saved with “Save track data”.`); }
+  catch { throw new UserError(`${handle.name} isn't a project saved by this tool. Choose a .tracks.json file saved with “Save project”.`); }
   const diff = mismatches(td, state.source.info);
   const fatal = diff.filter(d => d.fatal);
   if (fatal.length)
@@ -421,6 +427,7 @@ async function loadTracks() {
 function adoptTrackData(td, name = null) {
   state.td = td;
   state.tdSavedAs = name;
+  state.dirty = false;
   state.debugCache = {};
   state.clusterSmoothing = null;
   if (td.look) { state.params = sanitize(td.look); panel.setParams(state.params); }
@@ -446,6 +453,7 @@ function syncTimeline() {
 }
 
 function afterCutEdit(frame) {
+  state.dirty = true;
   if (frame !== undefined) { state.pendingCutEdits.add(frame); scheduleReanalysis(); }
   rebuildDerived(state.td);   // person tracks and clusters follow the new cuts at once
   state.clusterSmoothing = 1.5;
@@ -515,6 +523,7 @@ globalThis.heroTracker.runReanalysis = runReanalysis;
 
 function afterHeroEdit() {
   state.td.edited = true;
+  state.dirty = true;
   recompose();
   viewer.draw();
   render();
@@ -676,6 +685,9 @@ function render() {
   $("saveTracks").disabled = !state.td || busy;
   $("loadTracks").disabled = !source || busy;
   $("copyCuts").disabled = !state.td;
+  const note = !source ? "" : !state.td ? "Analyse the clip to see the look on it. You can set the look already." : "";
+  $("lookEmpty").textContent = note;
+  $("lookEmpty").hidden = !note;
   $("play").disabled = !source || busy;
   $("checkFrame").disabled = !source || busy;
   renderAnalysis();

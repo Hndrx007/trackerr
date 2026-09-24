@@ -1,64 +1,75 @@
 # Hero Tracker
 
-A client-side browser tool that bakes a surveillance-HUD tracking effect (a thermal hero plus a composed swarm of tracked boxes) into H.264 footage graded in DaVinci Resolve. It exports a frame-exact MP4 for the timeline. The video never leaves the machine.
+A browser tool that bakes a surveillance-HUD tracking effect into H.264 footage graded in DaVinci Resolve:
+- one person, the hero, gets a thermal-palette rectangle, brackets and a label;
+- a composed swarm of tracked boxes, with connectors, fills the rest of the frame.
 
-The full spec is in [docs/hero-tracker-spec.md](docs/hero-tracker-spec.md).
+It exports a frame-exact MP4 that lines up with the source on the Resolve timeline. Everything runs locally, and the video never leaves the machine.
 
-## Status
-
-| Milestone | State |
-|---|---|
-| M0 capability spike | done: **go** ([results](docs/m0-results.md)) |
-| M1 frame-exact round trip | automated acceptance passes; manual Resolve check pending ([results](docs/m1-results.md), [Resolve check](docs/m1-resolve-check.md)) |
-| M2 analysis | next |
+The full spec is in [docs/hero-tracker-spec.md](docs/hero-tracker-spec.md). Where things stand, and what needs your input: [docs/status.md](docs/status.md).
 
 ## Run it
 
-It needs Chrome or Edge on Windows, and must be served over HTTP. Opening it from `file://` breaks the module imports.
+It needs Chrome or Edge on Windows. For detection on the discrete GPU, set the browser to **High performance** in Windows Settings → System → Display → Graphics.
 
 ```bash
-python -m http.server 8000
+python tools/serve.py
 ```
 
-| Page | What it is |
-|---|---|
-| <http://localhost:8000/> | The app: open a clip, step through it, **Export clip**. |
-| <http://localhost:8000/tests.html> | In-browser tests. **Run all** runs about 40 tests in a few seconds. **Round trip on my own clip…** exports any clip to browser storage and verifies it, with no save dialog. |
-| <http://localhost:8000/spike.html> | The M0 capability spike. |
+Then open <http://localhost:8000/>. `tools/serve.py` is `python -m http.server` with no-cache headers, so the browser never runs a stale copy of the app after an update.
 
-For the discrete GPU, set the browser to **High performance** in Windows Settings → System → Display → Graphics.
+## Workflow
+
+1. **Open** a graded H.264 render from Resolve: MP4 or MOV, 8-bit, constant frame rate, up to 3840×2160.
+2. **Analyse.** The tool finds cuts, people and swarm points. It takes minutes, so use **Save project** (Analysis tab) afterwards; **Open project…** restores it, including your edits and your look.
+3. **Check the cuts.** Use `[` `]` to step through them, `C` to add a missed cut, and click a marker then `Delete` to remove a false one. The shots either side of an edited cut are re-analysed in the background.
+4. **Check the hero.** The lane under the scrubber is blue where there's a hero and red where people are detected but there's no hero. `G` jumps to the next red gap. Pause, click a person to make them the hero, and use `X` to clear.
+5. **Choose a look** in the Look tab: Surveillance, Lock-on, Scan, Minimal or Target. Hover a look to preview it on the current frame. Every setting is a slider; double-click one to reset it. Save your own looks, and import or export them as JSON.
+6. **Play** (`Space`) to see it moving, and **Check frame** to see the current frame at full resolution through the export path.
+7. **Export clip.** The file streams to disk, then the tool reopens it and checks it frame by frame against the source.
+8. In Resolve, put the export on V2 over the source; see [docs/m1-resolve-check.md](docs/m1-resolve-check.md) for how to confirm the alignment.
+
+The **Keys** button lists every shortcut.
+
+## Tests
+
+<http://localhost:8000/tests.html>. **Run all** runs about 90 in-browser tests in under a minute:
+- validation and frame-rate maths;
+- the renderer, and the frame-exact export round trips;
+- cut detection on a labelled clip;
+- person tracking and the swarm regression tests;
+- the composition floor for every look, and hero picking;
+- partial re-analysis after a cut edit.
+
+**Round trip on my own clip…** exports any clip to browser storage and verifies it.
 
 ## Layout
 
 ```
-index.html               app shell
+index.html                 app shell
 app/
-  main.js                state machine and wiring
-  env.js                 capability checks, encoder selection
-  media.js               Mediabunny input, validation, frame table, the shared frame iterator
-  export.js              render → encode → stream to disk; verification of the written file
-  errors.js              UserError: messages written for the editor
-  lib.js                 pinned third-party imports (change versions here only)
-  render/renderer.js     WebGL2 renderer shared by preview and export
-  render/glyphs.js       glyph atlas for text
-  render/burnin.js       M1 test overlay: frame number and a machine-readable marker
-  ui/viewer.js           frame viewer
-  ui/timeline.js         timecode, frame stepping, scrubber
-  ui/style.css
-tests.html, tests/       in-browser tests; fixtures in tests/fixtures (see tools/make-fixtures.sh)
-spike.html               M0 capability spike
-models/yolov8n.onnx      person detector (M2)
-docs/                    spec and milestone results
-reference/tracker-v2.html  earlier prototype (point tracking only is reused)
+  main.js                  state machine and wiring
+  env.js                   capability checks, encoder selection
+  media.js                 Mediabunny input, validation, the frame table, the shared frame iterator
+  export.js                render → encode → stream to disk; verification of the written file
+  trackdata.js             track data model, save/load, zero-lag smoothing
+  analysis/                worker (the analysis pass), cuts, detector, persons, swarm, client
+  render/                  renderer (WebGL2), compose (the composition pass), hud, params (settings
+                           and looks), palettes, glyphs, burnin (frame-number test overlay), debug
+  ui/                      viewer (playback), timeline (scrubber, cut markers, hero lane, cut graph),
+                           panel (settings generated from params.js), style.css
+tests.html, tests/         in-browser tests; fixtures in tests/fixtures (tools/make-*.{sh,py} rebuild them)
+tools/serve.py             local server
+spike.html                 M0 capability spike
+models/yolov8n.onnx        person detector
+docs/                      spec, milestone results, look review, Resolve check
 ```
-
-`reference/tracker.ipynb` (the original Colab prototype) hasn't been added to the repo yet.
 
 ## Libraries
 
-These are pinned on jsDelivr in `app/lib.js`. There's no build step.
+These are pinned on jsDelivr in `app/lib.js` and `app/lib-ort.js`. There's no build step.
 
-- [Mediabunny](https://mediabunny.dev) 1.59.1: demux, decode, encode, mux.
-- [onnxruntime-web](https://onnxruntime.ai) 1.30.0: person detection (M2).
+- [Mediabunny](https://mediabunny.dev) 1.59.1: demux, decode, mux.
+- [onnxruntime-web](https://onnxruntime.ai) 1.30.0: person detection on WebGPU, with a WASM fallback.
 
-The test fixture `tests/fixtures/zidane.jpg` is an Ultralytics sample image (AGPL-3.0).
+`tests/fixtures/zidane.jpg` and `bus.jpg` are Ultralytics sample images (AGPL-3.0).

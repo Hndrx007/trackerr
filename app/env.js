@@ -53,7 +53,7 @@ export async function checkEnvironment() {
     problems: [], warnings: [],
   };
   if (location.protocol === "file:")
-    env.problems.push("The page was opened from disk. Start it with `python -m http.server` and open it at http://localhost:8000.");
+    env.problems.push("The page was opened from disk. In the project folder run `python tools/serve.py`, then open http://localhost:8000.");
   if (!env.chromium)
     env.problems.push(`This is ${env.browser}. The tool needs Chrome or Edge on Windows: other browsers can't save the export straight to disk or use the hardware encoder.`);
   if (!env.webcodecs) env.problems.push("This browser has no WebCodecs video support. Update Chrome or Edge.");

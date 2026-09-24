@@ -1,6 +1,8 @@
 // YOLOv8n person detection: letterbox pre-processing, [1, 84, 8400] decoding, NMS.
 // Boxes are [x, y, w, h, conf] normalised to 0..1 of the source frame, top-left origin.
 
+import { UserError } from "../errors.js";
+
 export const INPUT = 640;
 const ANCHORS = 8400;
 
@@ -65,7 +67,7 @@ export async function createDetector({ modelUrl, lb, conf = 0.35, iouThreshold =
   ort.env.webgpu.powerPreference = "high-performance";
   ort.env.logLevel = "error";
   const res = await fetch(modelUrl);
-  if (!res.ok) throw new Error(`Couldn't load the person detector (${modelUrl}, HTTP ${res.status}).`);
+  if (!res.ok) throw new UserError(`Couldn't load the person detector (models/yolov8n.onnx, HTTP ${res.status}). Check the file is in the project's models folder, then reload the page.`);
   const bytes = new Uint8Array(await res.arrayBuffer());
 
   let session = null, backend = null, warning = null, adapter = null;
