@@ -8,6 +8,7 @@
 // All full-resolution pixels stay on the GPU. No readback happens here.
 import { UserError } from "../errors.js";
 import { buildAtlas, textWidth } from "./glyphs.js";
+import { paletteLUT } from "./palettes.js";
 
 const ATLAS_CHARS = Array.from({ length: 95 }, (_, i) => String.fromCharCode(32 + i)).join("") + "°·×→←";
 
@@ -43,6 +44,28 @@ void main() {
   float a = v_col.a * (v_uv.x < 0.0 ? 1.0 : texture(u_atlas, v_uv).a);
   o = vec4(v_col.rgb * a, a);   // premultiplied
 }`;
+// Thermal: the source's luma through gain and contrast into a 256×1 palette, inside a rectangle.
+// Rows above the wipe line show thermal; faint scan rows give it a sensor texture.
+const FS_THERMAL = `#version 300 es
+precision highp float;
+uniform sampler2D u_src;
+uniform sampler2D u_lut;
+uniform vec2 u_size;
+uniform vec4 u_rect;      // x, y, w, h in output pixels, top-left origin
+uniform float u_gain, u_contrast, u_wipe, u_alpha, u_lines;
+out vec4 o;
+void main() {
+  vec2 p = vec2(gl_FragCoord.x, u_size.y - gl_FragCoord.y);
+  if (p.x < u_rect.x || p.y < u_rect.y || p.x > u_rect.x + u_rect.z || p.y > u_rect.y + u_rect.w) discard;
+  if (p.y > u_rect.y + u_rect.w * u_wipe) discard;
+  vec3 c = texture(u_src, p / u_size).rgb;
+  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  float v = clamp((l * u_gain - 0.5) * u_contrast + 0.5, 0.0, 1.0);
+  vec3 t = texture(u_lut, vec2(v, 0.5)).rgb;
+  float row = mod(floor(p.y / max(1.0, u_lines)), 2.0);
+  t *= 1.0 - 0.08 * row;
+  o = vec4(t * u_alpha, u_alpha);
+}`;
 const FLOATS_PER_VERTEX = 8; // pos.xy, uv.xy, rgba
 
 function compile(gl, vs, fs) {
@@ -75,6 +98,10 @@ export class Renderer {
       exact: gl.getUniformLocation(this.srcProg, "u_exact"),
     };
     this.prog2d = compile(gl, VS_2D, FS_2D);
+    this.thermalProg = compile(gl, VS_FULL, FS_THERMAL);
+    this.ut = Object.fromEntries(["u_src", "u_lut", "u_size", "u_rect", "u_gain", "u_contrast", "u_wipe", "u_alpha", "u_lines"]
+      .map(n => [n, gl.getUniformLocation(this.thermalProg, n)]));
+    this.luts = new Map();
     this.u2d = { size: gl.getUniformLocation(this.prog2d, "u_size"), atlas: gl.getUniformLocation(this.prog2d, "u_atlas") };
 
     this.srcTex = gl.createTexture();
@@ -172,6 +199,7 @@ export class Renderer {
         this.#quad(x + w - lw, y + lw, lw, h - 2 * lw, -1, -1, -1, -1, col);
       },
       line: (x0, y0, x1, y1, lw, col) => this.#line(x0, y0, x1, y1, lw, col),
+      thermal: (x, y, w, h, opts) => this.#thermal(x, y, w, h, opts, W, H),
       text: (str, x, y, px, col) => this.#text(str, x, y, px, col),
       textWidth: (str, px) => textWidth(this.#atlas(px).atlas, str),
     };
@@ -196,6 +224,37 @@ export class Renderer {
       this.atlases.set(px, a);
     }
     return a;
+  }
+
+  // Thermal pass over a rectangle. Flushes pending 2D quads first so drawing order holds, then
+  // restores the 2D program for whatever the overlay draws next.
+  #thermal(x, y, w, h, { palette = "inferno", gain = 1, contrast = 1, wipe = 1, alpha = 1, lines = 2 } = {}, W, H) {
+    if (w <= 0 || h <= 0 || wipe <= 0 || alpha <= 0) return;
+    this.#flush();
+    const gl = this.gl;
+    let lut = this.luts.get(palette);
+    if (!lut) {
+      lut = this.#texture(paletteLUT(palette), 256, 1);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      this.luts.set(palette, lut);
+    }
+    gl.useProgram(this.thermalProg);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.srcTex);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, lut);
+    gl.uniform1i(this.ut.u_src, 0); gl.uniform1i(this.ut.u_lut, 1);
+    gl.uniform2f(this.ut.u_size, W, H);
+    gl.uniform4f(this.ut.u_rect, x, y, w, h);
+    gl.uniform1f(this.ut.u_gain, gain); gl.uniform1f(this.ut.u_contrast, contrast);
+    gl.uniform1f(this.ut.u_wipe, Math.min(1, wipe)); gl.uniform1f(this.ut.u_alpha, Math.min(1, alpha));
+    gl.uniform1f(this.ut.u_lines, lines);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.useProgram(this.prog2d);
+    gl.bindVertexArray(this.vao);
+    this.boundAtlas = null;
+    this.#bindAtlas(this.whiteTex);
   }
 
   #text(str, x, y, px, col) {
