@@ -65,3 +65,32 @@ export async function reviewClip(preset, start, end, name, { height = 1080 } = {
     return res.fps;
   } finally { src.dispose(); }
 }
+
+/** M5 check: analyse a clip, export it at source resolution with a look and the burn-in, verify, upload. */
+export async function m5Run(clipUrl, preset = "surveillance", onStage = () => {}) {
+  const { openSource } = await import("../app/media.js");
+  const { analyse } = await import("../app/analysis/client.js");
+  const { exportClip, verifyExport } = await import("../app/export.js");
+  const { drawBurnIn } = await import("../app/render/burnin.js");
+  const { defaultBitrate } = await import("../app/env.js");
+  const { opfsFile } = await import("./harness.js");
+  const file = new File([await (await fetch(clipUrl)).blob()], clipUrl.split("/").pop());
+  const src = await openSource(file);
+  try {
+    onStage("analysing");
+    const td = await analyse(file, src.info, { onProgress: p => onStage(`analysing ${p.done}/${p.total} ${p.fps.toFixed(1)} fps`) });
+    const p = presetValues(preset);
+    td.clusters = clusterPass(td, { smoothing: p.swarmSmoothing });
+    const layout = compose(td, p);
+    onStage("exporting");
+    const handle = await opfsFile(`m5-${file.name}`);
+    const res = await exportClip({ source: src, fileHandle: handle, bitrate: defaultBitrate(src.info.width, src.info.height, src.info.fps),
+      overlay: (o, i) => { drawHud(o, i, td, layout, p); drawBurnIn(o, i); },
+      onProgress: q => onStage(`exporting ${q.done}/${q.total} ${q.fps.toFixed(1)} fps`) });
+    onStage("verifying");
+    const report = await verifyExport(await handle.getFile(), src, { marker: true, compare: false });
+    onStage("uploading");
+    await fetch(`http://127.0.0.1:8001/m5-${file.name}`, { method: "PUT", body: await handle.getFile() });
+    return { analysis: td.analysis, shots: td.cuts.length + 1, export: res, report };
+  } finally { src.dispose(); }
+}
