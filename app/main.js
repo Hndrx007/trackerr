@@ -6,10 +6,10 @@ import { drawBurnIn } from "./render/burnin.js";
 import { Viewer } from "./ui/viewer.js";
 import { Timeline, timecode } from "./ui/timeline.js";
 import { UserError, isAbort } from "./errors.js";
-import { analyse, rebuildDerived } from "./analysis/client.js";
+import { analyse, rebuildDerived, reanalyseRange } from "./analysis/client.js";
 import { serialize, parse, mismatches, cutFrames, shotsOf } from "./trackdata.js";
-import { drawDebug, DEBUG_DEFAULTS } from "./render/debug.js";
-import { compose } from "./render/compose.js";
+import { drawDebug, DEBUG_DEFAULTS, drawPickables, personAt } from "./render/debug.js";
+import { compose, pickHero, clearHero, heroLane } from "./render/compose.js";
 import { drawHud } from "./render/hud.js";
 import { presetValues, sanitize } from "./render/params.js";
 import { clusterPass } from "./analysis/swarm.js";
@@ -36,6 +36,10 @@ const state = {
   clusterSmoothing: null,   // smoothing the current cluster candidates were built with
   view: "hud",              // hud | debug
   burnIn: false,
+  showPeople: true,         // pickable person boxes while paused
+  hoverPerson: null,
+  pendingCutEdits: new Set(),   // frames whose neighbouring shots need their swarm re-tracked
+  reanalysing: null,            // status text while that runs
 };
 
 // What the export draws: the HUD once there's track data, the frame-number burn-in before (or
@@ -53,6 +57,9 @@ function viewOverlay(o, i) {
   const pv = state.preview;
   if (pv) return drawHud(o, i, td, pv.layout, pv.params);
   if (state.layout) exportOverlay()(o, i);
+  // Paused: every person faintly, with their ID, so the editor can click one to make them the hero.
+  if (!viewer.playing && state.phase === "ready" && state.showPeople)
+    drawPickables(o, i, td, state.layout?.heroAt(i)?.seg.personId ?? null, state.hoverPerson);
 }
 
 const viewer = new Viewer({ stage: $("stage"), canvas: $("view"), overlay: viewOverlay });
@@ -90,6 +97,7 @@ function recompose() {
     state.clusterSmoothing = state.params.swarmSmoothing;
   }
   state.layout = compose(td, state.params);
+  timeline.setLane(heroLane(td, state.params));
 }
 // While a control moves: the shot under the playhead re-composes at once (milliseconds), and the
 // whole clip follows once the control has been still for a moment.
@@ -437,7 +445,8 @@ function syncTimeline() {
   timeline.setSignal(td && state.showGraph ? { d: td.cutSignal, threshold: td.cutThreshold, flash: td.cutFlash } : null);
 }
 
-function afterCutEdit() {
+function afterCutEdit(frame) {
+  if (frame !== undefined) { state.pendingCutEdits.add(frame); scheduleReanalysis(); }
   rebuildDerived(state.td);   // person tracks and clusters follow the new cuts at once
   state.clusterSmoothing = 1.5;
   recompose();
@@ -457,7 +466,7 @@ function addCut(f) {
     td.cuts.sort((a, b) => a.frame - b.frame);
   } else return;
   timeline.select(f);
-  afterCutEdit();
+  afterCutEdit(f);
 }
 
 function removeCut(f) {
@@ -466,8 +475,68 @@ function removeCut(f) {
   if (c.origin === "manual") td.cuts = td.cuts.filter(x => x !== c);
   else if (!td.cutsRemoved.includes(f)) td.cutsRemoved.push(f);
   else return;
-  afterCutEdit();
+  afterCutEdit(f);
 }
+
+/* ---------------- re-analysing the shots either side of an edited cut ---------------- */
+
+let reanalyseTimer = 0;
+function scheduleReanalysis() {
+  clearTimeout(reanalyseTimer);
+  reanalyseTimer = setTimeout(() => runReanalysis().catch(e => showError(e, "Couldn't update the swarm after the cut edit")), 700);
+}
+
+// The swarm resets at every cut, so an edited cut only affects the shots touching it. Those are
+// decoded again (swarm only; detections are cached) and spliced in; the rest of the clip stays.
+async function runReanalysis() {
+  if (state.reanalysing || !state.pendingCutEdits.size || !state.td) return;
+  const td = state.td, shots = shotsOf(td);
+  const edited = [...state.pendingCutEdits];
+  state.pendingCutEdits.clear();
+  let ranges = edited.flatMap(f => shots.filter(s => (f >= s.start && f < s.end) || (f - 1 >= s.start && f - 1 < s.end)))
+    .map(s => [s.start, s.end]).sort((x, y) => x[0] - y[0]);
+  ranges = ranges.reduce((acc, r) => { const last = acc.at(-1); if (last && r[0] <= last[1]) last[1] = Math.max(last[1], r[1]); else acc.push([...r]); return acc; }, []);
+  for (const [a, b] of ranges) {
+    state.reanalysing = `Re-tracking swarm points for frames ${a.toLocaleString("en-US")}–${(b - 1).toLocaleString("en-US")}…`;
+    render();
+    await reanalyseRange(state.file, td, [a, b]);
+  }
+  state.reanalysing = null;
+  if (td !== state.td) return;
+  state.clusterSmoothing = null;   // candidates rebuild from the new points
+  recompose();
+  viewer.draw();
+  render();
+  if (state.pendingCutEdits.size) scheduleReanalysis();
+}
+globalThis.heroTracker.runReanalysis = runReanalysis;
+
+/* ---------------- hero picking ---------------- */
+
+function afterHeroEdit() {
+  state.td.edited = true;
+  recompose();
+  viewer.draw();
+  render();
+}
+
+$("view").addEventListener("click", e => {
+  const td = state.td;
+  if (!td || viewer.playing || state.phase !== "ready" || state.view !== "hud") return;
+  const r = e.currentTarget.getBoundingClientRect(), f = timeline.index;
+  const id = personAt(td, f, (e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height);
+  if (id === null) return;
+  td.hero = pickHero(td, f, id);
+  afterHeroEdit();
+});
+$("view").addEventListener("pointermove", e => {
+  const td = state.td;
+  if (!td || viewer.playing || state.view !== "hud") return;
+  const r = e.currentTarget.getBoundingClientRect();
+  const id = personAt(td, timeline.index, (e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height);
+  e.currentTarget.style.cursor = id === null ? "" : "pointer";
+  if (id !== state.hoverPerson) { state.hoverPerson = id; viewer.draw(); }
+});
 
 function jumpCut(dir) {
   if (!state.td) return;
@@ -585,6 +654,8 @@ addEventListener("keydown", e => {
   else if (e.key === " ") { e.preventDefault(); viewer.toggle(); }
   else if (e.key === "[" || e.key === "]") jumpCut(e.key === "[" ? -1 : 1);
   else if (e.key === "c" || e.key === "C") addCut(timeline.index);
+  else if ((e.key === "x" || e.key === "X") && state.td) { state.td.hero = clearHero(state.td, timeline.index, state.params); afterHeroEdit(); }
+  else if ((e.key === "g" || e.key === "G") && state.td) { const g = timeline.nextGap(); if (g !== null) timeline.seek(g); }
   else if ((e.key === "Delete" || e.key === "Backspace") && timeline.selected !== null) { e.preventDefault(); removeCut(timeline.selected); }
 });
 
@@ -658,9 +729,8 @@ function renderAnalysis() {
     ["Cluster candidates", Object.keys(td.clusters).length.toLocaleString("en-US")],
     ...(state.tdSavedAs ? [["Track data file", state.tdSavedAs]] : []),
   ]));
-  $("analysisNote").textContent = td.edited
-    ? "Cut edits update person tracks at once. Swarm points in edited shots update when you analyse again (manual cuts are kept)."
-    : "";
+  $("analysisNote").textContent = state.reanalysing
+    ?? (td.edited ? "Edits are kept when you save the project, and survive analysing again." : "");
   const r = cutReport(td);
   $("cutStats").replaceChildren(...kv([
     ["Automatic cuts", r.autoCuts.toLocaleString("en-US")],

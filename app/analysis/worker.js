@@ -18,7 +18,7 @@ const post = (msg, transfer) => self.postMessage(msg, transfer ?? []);
 
 self.onmessage = ({ data: m }) => {
   if (m.type === "start") {
-    run(m).catch(e => post({
+    (m.options.range ? runRange(m) : run(m)).catch(e => post({
       type: e.name === "AbortError" ? "cancelled" : "error",
       message: e.message, user: e instanceof UserError, stack: e.stack,
     }));
@@ -144,6 +144,48 @@ async function run({ file, options: o }) {
       },
     }, transfer);
     await detector?.release();
+  } finally {
+    source.dispose();
+  }
+}
+
+/**
+ * Re-tracks swarm points over frames [a, b) with a given cut list, after the editor changed a
+ * cut. Detections are cut-independent and stay cached, so this is the swarm alone: no detector,
+ * no cut detection. Point IDs start at `idStart` so they never collide with the rest of the clip.
+ */
+async function runRange({ file, options: o }) {
+  ac = new AbortController();
+  const signal = ac.signal, t0 = performance.now();
+  const source = await openSource(file);
+  try {
+    const { width: W, height: H } = source.info;
+    const [a, b] = o.range;
+    const sw = 320, sh = o.proxyHeight ?? Math.max(16, Math.round(320 * H / W));
+    const c320 = new OffscreenCanvas(sw, sh).getContext("2d");
+    c320.imageSmoothingQuality = "high";
+    const cuts = new Set(o.cuts ?? []);
+    const swarm = new SwarmTracker(o.swarm ?? {});
+    swarm.nextId = o.idStart ?? 1;
+    const tracks = new Map();
+    let shot = o.shotStart ?? 0, lastPost = 0;
+    for await (const { index: f, sample } of frames(source, { start: a, end: b, signal })) {
+      if (f > a && cuts.has(f)) { shot++; swarm.reset(); }
+      sample.draw(c320, 0, 0, sw, sh);
+      const px = c320.getImageData(0, 0, sw, sh).data, luma = new Float32Array(sw * sh);
+      for (let i = 0, j = 0; i < luma.length; i++, j += 4) luma[i] = px[j] * 0.299 + px[j + 1] * 0.587 + px[j + 2] * 0.114;
+      const { ids, pts } = swarm.step(luma, sw, sh);
+      for (let i = 0; i < ids.length; i++) {
+        let t = tracks.get(ids[i]);
+        if (!t) tracks.set(ids[i], t = { shot, start: f, xy: [] });
+        t.xy.push(pts[i][0] / sw, pts[i][1] / sh);
+      }
+      const now = performance.now();
+      if (now - lastPost > 250) { lastPost = now; post({ type: "progress", done: f - a + 1, total: b - a, fps: (f - a + 1) / ((now - t0) / 1000), eta: 0, shots: shot + 1 }); }
+    }
+    const out = {}, transfer = [];
+    for (const [id, t] of tracks) { const pts = Float32Array.from(t.xy); out[id] = { shot: t.shot, start: t.start, pts }; transfer.push(pts.buffer); }
+    post({ type: "done", result: { range: [a, b], swarm: out, seconds: (performance.now() - t0) / 1000 } }, transfer);
   } finally {
     source.dispose();
   }

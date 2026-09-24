@@ -58,3 +58,36 @@ export function rebuildDerived(td) {
   td.clusters = clusterPass(td);
   return td;
 }
+
+/**
+ * After a cut edit: re-tracks the swarm over [a, b) (the shots either side of the edited cut) and
+ * splices the result into `td`. Point tracks inside the range are replaced; the rest of the clip
+ * is untouched. Resolves to the number of seconds it took.
+ */
+export function reanalyseRange(file, td, [a, b], { signal } = {}) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
+    const finish = () => worker.terminate();
+    signal?.addEventListener("abort", () => worker.postMessage({ type: "cancel" }), { once: true });
+    let idStart = 1;
+    for (const k in td.swarm) if (+k >= idStart) idStart = +k + 1;
+    worker.onerror = e => { finish(); reject(new Error(`Analysis worker failed: ${e.message}`)); };
+    worker.onmessage = ({ data: m }) => {
+      if (m.type === "cancelled") { finish(); reject(new DOMException("Cancelled", "AbortError")); }
+      else if (m.type === "error") { finish(); reject(m.user ? new UserError(m.message) : new Error(m.message)); }
+      else if (m.type === "done") {
+        finish();
+        for (const [id, t] of Object.entries(td.swarm)) {
+          const end = t.start + t.pts.length / 2;
+          if (t.start < b && end > a) delete td.swarm[id];   // tracks never cross a cut, so they lie wholly inside
+        }
+        Object.assign(td.swarm, m.result.swarm);
+        resolve(m.result.seconds);
+      }
+    };
+    worker.postMessage({ type: "start", file, options: {
+      range: [a, b], cuts: cutFrames(td).filter(f => f > a && f < b), idStart,
+      proxyHeight: td.proxy.height, swarm: td.analysis?.swarm,
+    } });
+  });
+}

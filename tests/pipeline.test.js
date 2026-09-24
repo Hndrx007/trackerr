@@ -72,3 +72,25 @@ test("HUD export: an analysed clip exports with the Surveillance look and every 
     return `${res.fps.toFixed(1)} fps\n${lines}`;
   } finally { src.dispose(); }
 }, { slow: true });
+
+test("Editing a cut re-analyses only the neighbouring shots", async () => {
+  const { reanalyseRange } = await import("../app/analysis/client.js");
+  const { shotsOf } = await import("../app/trackdata.js");
+  const file = await fixture("cuts_test.mp4");
+  const td = await run("cuts_test.mp4", { detect: false });
+  const before = JSON.stringify(Object.entries(td.swarm).filter(([, t]) => t.start >= 174).map(([id, t]) => [id, t.start, t.pts.length]));
+  // Add a cut in the middle of the zidane close-up (86..121), as an editor would with C.
+  td.cuts.push({ frame: 100, origin: "manual" });
+  td.cuts.sort((a, b) => a.frame - b.frame);
+  const shots = shotsOf(td), range = [shots.find(s => s.end === 100).start, shots.find(s => s.start === 100).end];
+  eq(range, [86, 122]);
+  const t0 = performance.now();
+  await reanalyseRange(file, td, range);
+  const ms = performance.now() - t0;
+  const crossing = Object.values(td.swarm).filter(t => t.start < 100 && t.start + t.pts.length / 2 > 100);
+  eq(crossing.length, 0, "swarm tracks crossing the new cut");
+  const after = JSON.stringify(Object.entries(td.swarm).filter(([, t]) => t.start >= 174).map(([id, t]) => [id, t.start, t.pts.length]));
+  eq(after, before, "tracks outside the edited shots are untouched");
+  assert(Object.values(td.swarm).some(t => t.start === 100), "the new shot was reseeded at its first frame");
+  return `re-analysed frames ${range[0]}–${range[1] - 1} in ${ms.toFixed(0)} ms`;
+}, { slow: true });

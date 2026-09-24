@@ -80,3 +80,33 @@ function pointsAt(td, f, cache) {
   }
   return p;
 }
+
+/**
+ * Pickable people (M4): every tracked person at frame f, faint, with their ID; the hero marked.
+ * Drawn in the viewer only while paused, never in the export.
+ */
+export function drawPickables(o, f, td, heroId, hoverId = null) {
+  const W = o.width, H = o.height, lw = Math.max(1, H * 0.0015), px = Math.max(10, Math.round(H * 0.02));
+  for (const [id, p] of Object.entries(td.persons)) {
+    const b = personBoxAt(p, f);
+    if (!b) continue;
+    const isHero = +id === heroId, hot = +id === hoverId;
+    const c = isHero ? [0.44, 0.66, 0.86, 0.9] : [1, 1, 1, hot ? 0.9 : 0.4];
+    o.strokeRect(b[0] * W, b[1] * H, b[2] * W, b[3] * H, lw * (hot || isHero ? 2 : 1), c);
+    const label = isHero ? `P${id} · HERO` : `P${id}`;
+    const tw = o.textWidth(label, px);
+    o.rect(b[0] * W, (b[1] + b[3]) * H - px * 1.3, tw + px * 0.5, px * 1.3, [0, 0, 0, 0.6]);
+    o.text(label, b[0] * W + px * 0.25, (b[1] + b[3]) * H - px * 1.15, px, c);
+  }
+}
+
+/** The person under normalised point (x, y) at frame f: the smallest box containing it, or null. */
+export function personAt(td, f, x, y) {
+  let best = null, area = Infinity;
+  for (const [id, p] of Object.entries(td.persons)) {
+    const b = personBoxAt(p, f);
+    if (!b || x < b[0] || y < b[1] || x > b[0] + b[2] || y > b[1] + b[3]) continue;
+    if (b[2] * b[3] < area) { area = b[2] * b[3]; best = +id; }
+  }
+  return best;
+}

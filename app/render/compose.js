@@ -72,11 +72,14 @@ export function autoPickHero(td) {
   return segs;
 }
 
-/** Hero segments in effect: manual picks override auto ones where they overlap. */
+/**
+ * Hero segments in effect: the editor's picks override auto ones where they overlap. A manual
+ * segment with personId null is a "no hero here" (the editor pressed X).
+ */
 export function heroSegments(td, params) {
   const manual = (td.hero ?? []).filter(s => !s.auto);
   const auto = params.autoPick ? autoPickHero(td) : [];
-  const out = [...manual];
+  const out = manual.filter(s => s.personId !== null && td.persons[s.personId]);
   for (const a of auto) {
     // Keep the parts of an auto segment no manual segment covers.
     let pieces = [[a.start, a.end]];
@@ -353,4 +356,42 @@ export function itemsAt(layout, f) {
 export function itemBox(it, f) {
   const i = Math.max(0, Math.min(it.boxes.length - 1, f - it.cstart));
   return it.boxes[i];
+}
+
+/* ---------------- hero editing (M4) ---------------- */
+
+// Removes [a, b) from a list of segments, keeping what lies outside it.
+function subtract(segs, a, b) {
+  return segs.flatMap(s => s.end <= a || s.start >= b ? [s]
+    : [{ ...s, end: a }, { ...s, start: b }].filter(x => x.end > x.start));
+}
+
+/**
+ * Click-to-pick: `personId` is the hero from frame f to the end of their track (within the shot).
+ * Replaces any overlapping hero from f onwards. Returns the new td.hero list.
+ */
+export function pickHero(td, f, personId) {
+  const p = td.persons[personId];
+  if (!p) return td.hero;
+  const shot = shotsOf(td).find(s => f >= s.start && f < s.end);
+  const end = Math.min(p.start + p.boxes.length, shot ? shot.end : Infinity);
+  const start = Math.max(f, p.start);
+  return [...subtract((td.hero ?? []).filter(s => !s.auto), start, end), { start, end, personId }].sort((x, y) => x.start - y.start);
+}
+
+/** X: no hero from frame f to the end of the hero segment in effect at f. */
+export function clearHero(td, f, params) {
+  const seg = heroSegments(td, params).find(s => f >= s.start && f < s.end);
+  if (!seg) return td.hero;
+  return [...subtract((td.hero ?? []).filter(s => !s.auto), f, seg.end), { start: f, end: seg.end, personId: null }].sort((x, y) => x.start - y.start);
+}
+
+/**
+ * The hero lane: per frame 1 = hero, 2 = people detected but no hero (a gap to fix), 0 = nobody.
+ */
+export function heroLane(td, params) {
+  const n = td.source.frameCount, lane = new Uint8Array(n);
+  for (const p of Object.values(td.persons)) lane.fill(2, p.start, Math.min(n, p.start + p.boxes.length));
+  for (const s of heroSegments(td, params)) lane.fill(1, s.start, Math.min(n, s.end));
+  return lane;
 }

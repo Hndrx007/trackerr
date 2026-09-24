@@ -148,3 +148,32 @@ test("Resolution independence: the same look at 1920×1080 and 3840×2160", () =
   assert(mean < 2.5, `mean difference ${mean.toFixed(2)} levels`);
   return `mean difference ${mean.toFixed(2)} levels over ${changed} HUD pixels`;
 });
+
+group("M4: hero picking and the hero lane");
+
+test("Click-to-pick: the hero from this frame to the end of their track, replacing the auto pick from here on", async () => {
+  const { pickHero, heroSegments, heroLane } = await import("../app/render/compose.js");
+  const td = syntheticTd(1), p = presetValues("surveillance");
+  eq(heroSegments(td, p).map(s => [s.start, s.end, s.personId]), [[0, 240, 1], [240, 480, 3]]);
+  td.hero = pickHero(td, 100, 2);   // person 2 lives 20..220 in shot 0
+  eq(heroSegments(td, p).map(s => [s.start, s.end, s.personId]), [[0, 100, 1], [100, 220, 2], [220, 240, 1], [240, 480, 3]]);
+  const lane = heroLane(td, p);
+  eq([lane[50], lane[150], lane[230], lane[300]], [1, 1, 1, 1]);
+});
+
+test("X clears the hero to the end of the segment in effect; the lane shows the gap in red", async () => {
+  const { clearHero, heroSegments, heroLane } = await import("../app/render/compose.js");
+  const td = syntheticTd(1), p = presetValues("surveillance");
+  td.hero = clearHero(td, 120, p);
+  eq(heroSegments(td, p).map(s => [s.start, s.end, s.personId]), [[0, 120, 1], [240, 480, 3]]);
+  const lane = heroLane(td, p);
+  eq([lane[119], lane[120], lane[239]], [1, 2, 2], "people present but no hero = gap");
+});
+
+test("A pick survives save and load with the rest of the project", async () => {
+  const { pickHero } = await import("../app/render/compose.js");
+  const { serialize, parse } = await import("../app/trackdata.js");
+  const td = syntheticTd(1);
+  td.hero = pickHero(td, 100, 2);
+  eq(parse(serialize(td)).hero, td.hero);
+});

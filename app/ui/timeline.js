@@ -1,5 +1,5 @@
 // Transport: timecode, frame number, step buttons, the scrubber with cut markers, and the
-// cut-signal debug graph (d(i) and the live threshold) under it. The hero lane arrives in M4.
+// cut-signal debug graph (d(i) and the live threshold) and the hero lane under it.
 
 /** Non-drop-frame timecode from a frame index, at the nominal rate (23.976 → 24). */
 export function timecode(index, [num, den]) {
@@ -23,6 +23,8 @@ export class Timeline {
     this.total = root.querySelector("[data-total]");
     this.markersEl = root.querySelector("[data-markers]");
     this.graph = root.querySelector("[data-graph]");
+    this.laneEl = root.querySelector("[data-lane]");
+    this.lane = null;         // Uint8Array per frame: 0 nobody, 1 hero, 2 gap
     this.fps = null;
     this.count = 0;
     this.index = 0;
@@ -42,6 +44,9 @@ export class Timeline {
     this.graph.addEventListener("pointerdown", e => this.#graphSeek(e));
     this.graph.addEventListener("pointermove", e => { if (e.buttons & 1) this.#graphSeek(e); });
     new ResizeObserver(() => this.drawGraph()).observe(this.graph);
+    new ResizeObserver(() => this.drawLane()).observe(this.laneEl);
+    this.laneEl.addEventListener("pointerdown", e => this.#laneSeek(e));
+    this.laneEl.addEventListener("pointermove", e => { if (e.buttons & 1) this.#laneSeek(e); });
   }
 
   setClip(info) {
@@ -53,6 +58,7 @@ export class Timeline {
     this.total.textContent = info ? `of ${this.count.toLocaleString("en-US")}` : "";
     this.setCuts([]);
     this.setSignal(null);
+    this.setLane(null);
     this.show(0);
   }
 
@@ -77,6 +83,51 @@ export class Timeline {
     this.selected = frame;
     this.markersEl.querySelectorAll("[data-cut]").forEach(m => m.classList.toggle("sel", +m.dataset.cut === frame));
     this.onSelectCut?.(frame);
+  }
+
+  /** The hero lane (per-frame states) or null to hide it. */
+  setLane(lane) {
+    this.lane = lane;
+    this.laneEl.hidden = !lane;
+    this.drawLane();
+  }
+
+  /** Next frame after the playhead where a gap (people but no hero) starts, or null. */
+  nextGap() {
+    const l = this.lane;
+    if (!l) return null;
+    for (let f = this.index + 1; f < l.length; f++) if (l[f] === 2 && l[f - 1] !== 2) return f;
+    for (let f = 0; f <= this.index && f < l.length; f++) if (l[f] === 2 && (f === 0 || l[f - 1] !== 2)) return f;   // wrap
+    return null;
+  }
+
+  #laneSeek(e) {
+    const r = this.laneEl.getBoundingClientRect();
+    this.seek((e.clientX - r.left - THUMB / 2) / (r.width - THUMB) * (this.count - 1));
+  }
+
+  drawLane() {
+    const l = this.lane, c = this.laneEl;
+    if (!l || c.hidden || !this.count) return;
+    const dpr = devicePixelRatio || 1, W = Math.round(c.clientWidth * dpr), H = Math.round(c.clientHeight * dpr);
+    if (!W || !H) return;
+    if (c.width !== W) c.width = W;
+    if (c.height !== H) c.height = H;
+    const g = c.getContext("2d"), pad = THUMB / 2 * dpr, span = W - 2 * pad, n = this.count;
+    const css = getComputedStyle(document.documentElement), v = k => css.getPropertyValue(k).trim();
+    const fill = [v("--edge"), v("--accent"), v("--bad")];
+    g.clearRect(0, 0, W, H);
+    // Run-length: one rect per run of equal state, at least a pixel wide.
+    let s = 0;
+    for (let f = 1; f <= n; f++) {
+      if (f < n && l[f] === l[s]) continue;
+      const x0 = pad + s / (n - 1) * span, x1 = pad + Math.min(f, n - 1) / (n - 1) * span;
+      g.fillStyle = fill[l[s]];
+      g.fillRect(Math.floor(x0), l[s] ? 0 : H * 0.35, Math.max(1, Math.ceil(x1 - x0)), l[s] ? H : H * 0.3);
+      s = f;
+    }
+    g.fillStyle = v("--ink");
+    g.fillRect(pad + this.index / Math.max(1, n - 1) * span - dpr / 2, 0, dpr, H);
   }
 
   /** Cut-signal data for the graph, or null to hide it. */
@@ -106,6 +157,7 @@ export class Timeline {
     this.tc.textContent = this.fps ? timecode(index, this.fps) : "--:--:--:--";
     this.fr.textContent = this.count ? `f ${index.toLocaleString("en-US")}` : "f –";
     this.drawGraph();
+    this.drawLane();
   }
 
   #graphSeek(e) {
