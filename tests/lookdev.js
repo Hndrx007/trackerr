@@ -46,3 +46,22 @@ export async function lookRun(preset, frames, tag, params = null, { clip = "/_lo
   return { composeMs: +composeMs.toFixed(0), items: layout.items.length, heroes: layout.heroes.length };
 }
 globalThis.lookRun = lookRun;
+
+/** Renders a range of the look-dev clip with a look to an MP4 (at `height`) and uploads it. */
+export async function reviewClip(preset, start, end, name, { height = 1080 } = {}) {
+  const { openSource } = await import("../app/media.js");
+  const { exportClip } = await import("../app/export.js");
+  const { opfsFile } = await import("./harness.js");
+  const c = globalThis.__lookCache;
+  const src = await openSource(c.file);
+  try {
+    const p = presetValues(preset);
+    c.td.clusters = clusterPass(c.td, { smoothing: p.swarmSmoothing });
+    const layout = compose(c.td, p);
+    const handle = await opfsFile(`review-${name}.mp4`);
+    const res = await exportClip({ source: src, fileHandle: handle, start, end, bitrate: 16e6,
+      overlay: (o, i) => drawHud(o, i, c.td, layout, p) });
+    await fetch(`http://127.0.0.1:8001/${name}.mp4`, { method: "PUT", body: await handle.getFile() });
+    return res.fps;
+  } finally { src.dispose(); }
+}

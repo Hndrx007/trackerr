@@ -13,6 +13,7 @@ export const PARAMS = [
   { key: "colour", label: "HUD colour", type: "colour", group: "Look", default: "#ff2a1f" },
   { key: "intensity", label: "Overall intensity", type: "range", group: "Look", default: 1, min: 0, max: 1, step: 0.01 },
   { key: "chrome", label: "Frame marks and REC readout", type: "toggle", group: "Look", default: true },
+  { key: "sweep", label: "Frame sweep", type: "toggle", group: "Look", default: false, hint: "a scan line travelling down the whole picture" },
 
   // Hero
   { key: "palette", label: "Thermal palette", type: "select", group: "Hero", default: "inferno", options: [["inferno", "Inferno"], ["iron", "Iron"], ["whitehot", "White-hot"]] },
@@ -60,6 +61,7 @@ export const PARAMS = [
   { key: "connectTiers", label: "Connect", type: "select", group: "Connectors", default: "lock", options: [["lock", "Lock boxes"], ["lockscan", "Lock and scan boxes"]] },
   { key: "connectRange", label: "Range", type: "range", group: "Connectors", default: 0.6, min: 0.1, max: 1.5, step: 0.01, hint: "fraction of frame width" },
   { key: "connectWeight", label: "Weight", type: "range", group: "Connectors", default: 0.0022, min: 0.0005, max: 0.008, step: 0.0001, hint: "fraction of frame height" },
+  { key: "pulse", label: "Signal pulses", type: "toggle", group: "Connectors", default: false, hint: "packets travelling along each connector into the hero" },
 
   // Tracking
   { key: "autoPick", label: "Auto-pick hero per shot", type: "toggle", group: "Tracking", default: true },
@@ -84,19 +86,20 @@ export const PRESETS = {
     name: "Lock-on",
     purpose: "Sparse and deliberate: a few heavy lock boxes with readouts, strong connectors, the full shot-start sequence.",
     values: {
-      colour: "#ff3b2f", amount: 5, lockCount: 4, focus: 0.75, lockStyle: "brackets", scanStyle: "plain",
-      scanlines: 0.2, readout: "telemetry", connectTiers: "lock", connectWeight: 0.0035, connectRange: 0.9,
-      acquire: 0.35, release: 0.25, sequence: true, seqHero: 0.5, seqThermal: 1.0, seqWipe: 0.45,
-      heroBox: "brackets", bracket: 0.3, heroStroke: 0.005, minVisible: 1.2, hysteresis: 0.8,
+      colour: "#ff3b2f", amount: 4, lockCount: 4, focus: 0.9, lockStyle: "brackets", scanStyle: "plain",
+      scanlines: 0.2, readout: "telemetry", connectTiers: "lock", connectWeight: 0.0035, connectRange: 1.2, pulse: true,
+      acquire: 0.4, release: 0.25, sequence: true, seqHero: 0.5, seqThermal: 1.0, seqWipe: 0.45, chrome: false,
+      heroBox: "brackets", bracket: 0.3, heroStroke: 0.005, minVisible: 1.5, hysteresis: 1.0, wPerson: 2,
     },
   },
   scan: {
     name: "Scan",
     purpose: "Denser and fainter: mostly scan boxes and trace ticks, few locks, no connectors. Reads as a sweep of the whole frame.",
     values: {
-      colour: "#ff4d3d", intensity: 0.8, amount: 18, lockCount: 1, focus: 0.15, scanStyle: "corners",
-      scanlines: 0.75, trace: "ticks", readout: "id", connectors: false, acquire: 0.15, release: 0.12,
-      sequence: false, spacing: 0.025, minVisible: 0.5, hysteresis: 0.3,
+      colour: "#ff4d3d", intensity: 0.8, amount: 24, lockCount: 1, focus: 0.1, scanStyle: "corners",
+      scanlines: 0.75, trace: "ticks", readout: "id", connectors: false, acquire: 0.12, release: 0.1,
+      sequence: false, spacing: 0.012, minBox: 0.028, maxSize: 0.35, minVisible: 0.5, hysteresis: 0.3, sweep: true,
+      wMotion: 1.2, wSize: 0.3,
     },
   },
   minimal: {

@@ -54,17 +54,32 @@ export function drawHud(o, f, td, layout, params) {
       if (tier === TIER.lock) o.line(p0[0], p0[1], p1[0], p1[1], lw, col(a));
       else dashed(o, p0, p1, lw, 10 * u, 7 * u, col(a));
       o.rect(p1[0] - 2.5 * u, p1[1] - 2.5 * u, 5 * u, 5 * u, col(a * 1.2));
+      if (params.pulse) {
+        // Packets travel from the box into the hero, two per connector, phase from the item's ID.
+        const L = Math.hypot(p0[0] - p1[0], p0[1] - p1[1]), period = Math.max(8, Math.round(L / (14 * u)));
+        for (const k of [0, 0.5]) {
+          const t = ((f + hash(it.id) * period) / period + k) % 1, s = 5 * u;
+          const x = p1[0] + (p0[0] - p1[0]) * t, y = p1[1] + (p0[1] - p1[1]) * t;
+          o.rect(x - s / 2, y - s / 2, s, s, col(Math.min(1, a * 1.6) * (1 - 0.6 * t)));
+        }
+      }
     }
+  }
+
+  // A scan line travelling down the whole picture, with a faint trail.
+  if (params.sweep) {
+    const period = Math.round(layout.fps * 2.5), y = ((f % period) / period) * H;
+    for (let k = 0; k < 6; k++) o.rect(0, y - k * 10 * u, W, Math.max(1, 1.5 * u), col(0.28 * (1 - k / 6)));
   }
 
   // 3. Swarm: trace, then scan, then lock.
   if (params.trace !== "off") {
-    const s = (params.trace === "ticks" ? 5 : 2.2) * u;
+    const s = (params.trace === "ticks" ? 7 : 2.6) * u;
     for (const t of layout.trace) {
       if (f < t.start || f >= t.end) continue;
       const pt = td.swarm[t.id], i = f - pt.start;
       const x = pt.pts[2 * i] * W, y = pt.pts[2 * i + 1] * H;
-      const a = 0.4 * clamp01((f - t.start + 1) / 4) * clamp01((t.end - f) / 4);
+      const a = 0.55 * clamp01((f - t.start + 1) / 4) * clamp01((t.end - f) / 4);
       if (params.trace === "ticks") { o.rect(x - s, y - 0.6 * u, 2 * s, 1.2 * u, col(a)); o.rect(x - 0.6 * u, y - s, 1.2 * u, 2 * s, col(a)); }
       else o.rect(x - s / 2, y - s / 2, s, s, col(a));
     }
@@ -170,15 +185,16 @@ function drawHero(o, r, f, seg, layout, params, col, dark, u, td) {
     const fpx = Math.max(9, params.labelSize * o.height), text = params.label.toUpperCase();
     const n = seg.cont ? text.length : Math.ceil(text.length * clamp01((f - seg.labelAt + 1) / Math.max(1, acqFrames)));
     const tw = o.textWidth(text, fpx), th = fpx * 1.35;
-    const above = r[1] - lw * 2 - th >= 0;
-    const ty = above ? r[1] - lw * 2 - th : r[1] + r[3] + lw * 2;
-    const tx = Math.min(Math.max(0, r[0] - lw), o.width - tw - fpx);
+    // Above the box, else below it, else (a close-up filling the frame) just inside its top.
+    const above = r[1] - lw * 2 - th - fpx >= 0, below = r[1] + r[3] + lw * 2 + th + fpx <= o.height;
+    const ty = above ? r[1] - lw * 2 - th : below ? r[1] + r[3] + lw * 2 : Math.max(lw * 3, r[1] + lw * 3) + fpx * 1.2;
+    const tx = Math.min(Math.max(above || below ? 0 : 40 * u, r[0] - lw + (above || below ? 0 : lw * 4)), o.width - tw - fpx);
     o.rect(tx, ty, tw + fpx * 0.7, th, col(0.92));
     o.text(text.slice(0, n), tx + fpx * 0.35, ty + fpx * 0.12, fpx, dark(1));
     if (params.readout !== "off") {
       const spx = fpx * 0.62;
       const info = `TGT P${pad(seg.personId, 2)}  X ${(cx / o.width).toFixed(3)}  Y ${(cy / o.height).toFixed(3)}`;
-      o.text(info, tx + 1, above ? ty - spx * 1.35 : ty + th + spx * 0.25, spx, col(0.85));
+      o.text(info, tx + 1, above || !below ? ty - spx * 1.35 : ty + th + spx * 0.25, spx, col(0.85));
     }
   }
 }

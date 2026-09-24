@@ -37,8 +37,9 @@ export function outputColorSpace(src = {}, encoderReported = {}) {
  * @param {(s: {done, total, fps, eta}) => void} [p.onProgress]
  * @param {AbortSignal} [p.signal]
  */
-export async function exportClip({ source, fileHandle, overlay, bitrate, onProgress, signal }) {
-  const { width, height, fps, frameCount } = source.info;
+export async function exportClip({ source, fileHandle, overlay, bitrate, onProgress, signal, start = 0, end = source.info.frameCount }) {
+  const { width, height, fps } = source.info;
+  const frameCount = end - start;   // a range is for review renders; the app always exports the whole clip
   const enc = await pickEncoder({ width, height, fps, bitrate });
   let writable = null, bytes = 0;
   const target = new StreamTarget(new WritableStream({
@@ -85,17 +86,18 @@ export async function exportClip({ source, fileHandle, overlay, bitrate, onProgr
     });
     writable = await fileHandle.createWritable({ keepExistingData: false });
     await output.start();
-    for await (const { index, sample } of frames(source, { signal })) {
+    for await (const { index, sample } of frames(source, { start, end, signal })) {
       renderer.render(sample, o => overlay?.(o, index));
+      const k = index - start;
       const frame = new VideoFrame(renderer.canvas, {
-        timestamp: Math.round(index * frameUs), duration: Math.round(frameUs),
+        timestamp: Math.round(k * frameUs), duration: Math.round(frameUs),
       });
-      try { encoder.encode(frame, { keyFrame: index % gop === 0 }); } finally { frame.close(); }
+      try { encoder.encode(frame, { keyFrame: k % gop === 0 }); } finally { frame.close(); }
       // Backpressure: keep the encoder and the muxer from running far behind the decoder.
       while ((encoder.encodeQueueSize > 4 || queued > 16) && !encoderError)
         await (encoder.encodeQueueSize > 4 ? new Promise(r => encoder.addEventListener("dequeue", r, { once: true })) : muxing);
       if (encoderError) throw encoderError;
-      done = index + 1;
+      done = k + 1;
       const now = performance.now();
       if (onProgress && (now - lastReport > 250 || done === frameCount)) {
         lastReport = now;
