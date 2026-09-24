@@ -127,8 +127,9 @@ export async function exportClip({ source, fileHandle, overlay, bitrate, onProgr
  * @param {File} file  the written export (fileHandle.getFile())
  * @param {object} [o]
  * @param {boolean} [o.marker]  read the burn-in marker on every frame (M1 test overlay)
+ * @param {boolean} [o.compare]  compare the picture with the source (only meaningful when the overlay leaves part of it alone)
  */
-export async function verifyExport(file, source, { marker = false, onProgress, signal } = {}) {
+export async function verifyExport(file, source, { marker = false, compare = true, onProgress, signal } = {}) {
   const checks = [];
   const add = (name, pass, detail, level = "error") => checks.push({ name, pass, detail, level });
   const src = source.info;
@@ -201,7 +202,7 @@ export async function verifyExport(file, source, { marker = false, onProgress, s
       add("Frame N shows N (burn-in marker on every frame)", bad === 0,
         bad === 0 ? `all ${o.frameCount.toLocaleString("en-US")} frames read back their own index`
           : `${bad} frames wrong; first at frame ${firstBad.index}, which shows ${firstBad.got ?? "an unreadable marker"}`);
-    if (colour.n) {
+    if (colour.n && compare) {
       const bias = colour.bias.map(b => b / colour.n), mad = colour.mad / colour.n;
       const ok = bias.every(b => Math.abs(b) < 3) && mad < 10;
       add("Picture matches the source outside the overlay", ok,

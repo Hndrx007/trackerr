@@ -50,3 +50,25 @@ test("Natural clip with two people: both tracked on every frame, IDs never swap"
   }
   return `tracks ${ids.join(", ")}; backend ${td.analysis.backend}, ${td.analysis.fps.toFixed(1)} fps, detection ${td.analysis.detectMs?.toFixed(0)} ms median`;
 }, { slow: true });
+
+test("HUD export: an analysed clip exports with the Surveillance look and every frame stays exact", async () => {
+  const { compose } = await import("../app/render/compose.js");
+  const { drawHud } = await import("../app/render/hud.js");
+  const { presetValues } = await import("../app/render/params.js");
+  const { drawBurnIn } = await import("../app/render/burnin.js");
+  const { exportClip, verifyExport } = await import("../app/export.js");
+  const { opfsFile } = await import("./harness.js");
+  const file = await fixture("h264_24_natural.mp4");
+  const td = await run("h264_24_natural.mp4");
+  const p = presetValues("surveillance"), L = compose(td, p);
+  const src = await openSource(file);
+  try {
+    const handle = await opfsFile("hud-natural.mp4");
+    const res = await exportClip({ source: src, fileHandle: handle, bitrate: 4e6,
+      overlay: (o, i) => { drawHud(o, i, td, L, p); drawBurnIn(o, i); } });
+    const report = await verifyExport(await handle.getFile(), src, { marker: true, compare: false });
+    const lines = report.checks.map(c => `${c.pass ? "✓" : "✗"} ${c.name}: ${c.detail}`).join("\n");
+    assert(report.pass, lines);
+    return `${res.fps.toFixed(1)} fps\n${lines}`;
+  } finally { src.dispose(); }
+}, { slow: true });

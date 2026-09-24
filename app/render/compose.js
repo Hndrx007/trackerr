@@ -106,7 +106,7 @@ const centre = r => [r[0] + r[2] / 2, r[1] + r[3] / 2];
  *  `tiers[f - appear]` is the tier at frame f (0 = not drawn). exit = first frame of the release
  *  animation (or null), end = first frame no longer drawn.
  */
-export function compose(td, params) {
+export function compose(td, params, { shot: onlyShot = null } = {}) {
   const fps = td.source.fps[0] / td.source.fps[1];
   const aspect = td.source.width / td.source.height;
   const sec = s => Math.max(1, Math.round(s * fps));
@@ -130,7 +130,8 @@ export function compose(td, params) {
 
   const items = [];
   const trace = [];
-  for (const shot of shotsOf(td)) composeShot(shot);
+  // One shot only is for instant feedback while a slider moves; the full pass follows.
+  for (const shot of shotsOf(td)) if (onlyShot === null || shot.shot === onlyShot) composeShot(shot);
   return { params, fps, P, heroes, items, trace, heroAt, aspect, shots: shotsOf(td) };
 
   function composeShot({ shot, start, end }) {

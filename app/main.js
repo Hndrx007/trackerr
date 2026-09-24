@@ -9,6 +9,12 @@ import { UserError, isAbort } from "./errors.js";
 import { analyse, rebuildDerived } from "./analysis/client.js";
 import { serialize, parse, mismatches, cutFrames, shotsOf } from "./trackdata.js";
 import { drawDebug, DEBUG_DEFAULTS } from "./render/debug.js";
+import { compose } from "./render/compose.js";
+import { drawHud } from "./render/hud.js";
+import { presetValues, sanitize } from "./render/params.js";
+import { clusterPass } from "./analysis/swarm.js";
+import { Panel } from "./ui/panel.js";
+import { Renderer } from "./render/renderer.js";
 
 const $ = id => document.getElementById(id);
 
@@ -24,18 +30,131 @@ const state = {
   debug: { ...DEBUG_DEFAULTS },
   debugCache: {},
   showGraph: true,
+  params: loadLastLook(),   // the look
+  layout: null,             // composition of the look over the track data
+  preview: null,            // { params, layout } while hovering a look in the menu
+  clusterSmoothing: null,   // smoothing the current cluster candidates were built with
+  view: "hud",              // hud | debug
+  burnIn: false,
 };
 
-// The export overlay: M1's burn-in until M3 replaces it with the composed HUD.
-const overlay = drawBurnIn;
-// The viewer shows the export's overlay until there's track data, then the analysis debug view.
-const viewOverlay = (o, i) => state.td ? drawDebug(o, i, state.td, state.debug, state.debugCache) : overlay(o, i);
+// What the export draws: the HUD once there's track data, the frame-number burn-in before (or
+// on top, for alignment checks in Resolve).
+function exportOverlay() {
+  const { td, layout, params } = state;
+  if (!td || !layout) return drawBurnIn;
+  return state.burnIn ? (o, i) => { drawHud(o, i, td, layout, params); drawBurnIn(o, i); } : (o, i) => drawHud(o, i, td, layout, params);
+}
+// What the viewer draws: the same as the export, or the analysis debug view.
+function viewOverlay(o, i) {
+  const { td } = state;
+  if (!td) return drawBurnIn(o, i);
+  if (state.view === "debug") return drawDebug(o, i, td, state.debug, state.debugCache);
+  const pv = state.preview;
+  if (pv) return drawHud(o, i, td, pv.layout, pv.params);
+  if (state.layout) exportOverlay()(o, i);
+}
 
 const viewer = new Viewer({ stage: $("stage"), canvas: $("view"), overlay: viewOverlay });
 viewer.onError = e => showError(e, "Couldn't show that frame");
+viewer.onPlayFrame = i => timeline.show(i);
+viewer.onPlayState = playing => { $("play").textContent = playing ? "Pause" : "Play"; render(); };
 const timeline = new Timeline({ root: $("transport"), onSeek: i => viewer.show(i), onSelectCut: () => render() });
+
+const panel = new Panel($("settings"), {
+  params: state.params,
+  onChange: params => { state.params = params; saveLastLook(params); scheduleRecompose(); },
+  onPreview: params => {
+    const i = Math.max(0, timeline.index), shots = state.td ? shotsOf(state.td) : [];
+    state.preview = params && state.td ? { params, layout: compose(state.td, params, { shot: shots.findIndex(s => i >= s.start && i < s.end) }) } : null;
+    viewer.draw();
+  },
+});
 // For inspection from DevTools: heroTracker.state.td is the current track data.
-globalThis.heroTracker = { state, viewer, timeline };
+globalThis.heroTracker = { state, viewer, timeline, panel };
+
+/* ---------------- the look: composition ---------------- */
+
+function loadLastLook() {
+  try { const v = JSON.parse(localStorage.getItem("heroTracker.look.v1")); if (v) return sanitize(v); } catch { /* none saved */ }
+  return presetValues("surveillance");
+}
+function saveLastLook(p) { try { localStorage.setItem("heroTracker.look.v1", JSON.stringify(p)); } catch { /* private mode */ } }
+
+// Composition re-runs whenever the look or the track data changes; it takes milliseconds per shot.
+function recompose() {
+  const td = state.td;
+  if (!td) { state.layout = null; return; }
+  if (state.clusterSmoothing !== state.params.swarmSmoothing) {
+    td.clusters = clusterPass(td, { smoothing: state.params.swarmSmoothing });
+    state.clusterSmoothing = state.params.swarmSmoothing;
+  }
+  state.layout = compose(td, state.params);
+}
+// While a control moves: the shot under the playhead re-composes at once (milliseconds), and the
+// whole clip follows once the control has been still for a moment.
+let fullTimer = 0;
+function scheduleRecompose() {
+  const td = state.td;
+  if (!td) return;
+  // (A new swarm smoothing rebuilds the candidates for the whole clip: that waits for the full pass.)
+  const shots = shotsOf(td), i = Math.max(0, timeline.index);
+  const shot = shots.findIndex(s => i >= s.start && i < s.end);
+  state.layout = compose(td, state.params, { shot });
+  viewer.draw();
+  clearTimeout(fullTimer);
+  fullTimer = setTimeout(() => { recompose(); viewer.draw(); render(); }, 180);
+}
+/** Makes sure the whole-clip composition is current (before export or check frame). */
+function settleLayout() {
+  if (fullTimer) { clearTimeout(fullTimer); fullTimer = 0; recompose(); }
+}
+
+/* ---------------- panel tabs, view mode, playback, check frame ---------------- */
+
+document.querySelectorAll(".tabs [data-tab]").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll(".tabs [data-tab]").forEach(x => x.setAttribute("aria-selected", x === b));
+  document.querySelectorAll(".tab[data-tab]").forEach(t => t.hidden = t.dataset.tab !== b.dataset.tab);
+}));
+document.querySelectorAll("#viewMode [data-mode]").forEach(b => b.addEventListener("click", () => {
+  state.view = b.dataset.mode;
+  document.querySelectorAll("#viewMode [data-mode]").forEach(x => x.setAttribute("aria-pressed", x === b));
+  viewer.draw();
+}));
+$("play").onclick = () => viewer.toggle();
+$("burnIn").onchange = e => { state.burnIn = e.target.checked; viewer.draw(); };
+$("checkFrame").onclick = () => checkFrame().catch(e => showError(e, "Couldn't render the check frame"));
+
+// Renders the current frame at full resolution through the export path (same renderer, same
+// overlay, source size) and shows it 1:1 in a pannable view. The pixels go GPU → bitmap → screen.
+async function checkFrame() {
+  const { source } = state;
+  if (!source) return;
+  viewer.pause();
+  settleLayout();
+  const f = Math.max(0, timeline.index), { width: W, height: H } = source.info;
+  const r = new Renderer(new OffscreenCanvas(W, H));
+  const sample = await (await import("./media.js")).frameReader(source)(f);
+  try { r.render(sample, (o => exportOverlay()(o, f))); } finally { sample.close(); }
+  const bmp = r.canvas.transferToImageBitmap();
+  r.dispose();
+  const c = $("checkCanvas");
+  c.width = W; c.height = H;
+  c.getContext("bitmaprenderer").transferFromImageBitmap(bmp);
+  $("checkInfo").textContent = `frame ${f.toLocaleString("en-US")} · ${W}×${H} at 1:1 · rendered through the export path · drag to pan`;
+  const d = $("checkDlg");
+  d.showModal();
+  const pan = $("checkPan");
+  pan.scrollLeft = (W - pan.clientWidth) / 2; pan.scrollTop = (H - pan.clientHeight) / 2;
+}
+$("checkClose").onclick = () => $("checkDlg").close();
+{
+  const pan = $("checkPan");
+  let drag = null;
+  pan.addEventListener("pointerdown", e => { drag = { x: e.clientX, y: e.clientY, l: pan.scrollLeft, t: pan.scrollTop }; pan.classList.add("dragging"); pan.setPointerCapture(e.pointerId); });
+  pan.addEventListener("pointermove", e => { if (drag) { pan.scrollLeft = drag.l - (e.clientX - drag.x); pan.scrollTop = drag.t - (e.clientY - drag.y); } });
+  pan.addEventListener("pointerup", () => { drag = null; pan.classList.remove("dragging"); });
+}
 
 /* ---------------- environment ---------------- */
 
@@ -112,8 +231,10 @@ async function load(file, handle) {
     state.td = null;
     state.tdSavedAs = null;
     state.debugCache = {};
+    state.layout = null;
+    state.clusterSmoothing = null;
     state.bitrate = defaultBitrate(source.info.width, source.info.height, source.info.fps);
-    viewer.setSource(source);
+    viewer.setSource(source, file);
     timeline.setClip(source.info);
     syncTimeline();
     viewer.show(0);
@@ -135,7 +256,10 @@ $("export").onclick = () => runExport().catch(e => showError(e, "Couldn't export
 async function runExport() {
   const { source } = state;
   if (!source || state.phase !== "ready") return;
+  viewer.pause();
+  settleLayout();
   assertCanExport();
+  const overlay = exportOverlay(), hud = !!state.layout, marker = !hud || state.burnIn;
   const base = source.info.name.replace(/\.[^.]+$/, "");
   let handle;
   try {
@@ -182,7 +306,7 @@ async function runExport() {
   let report;
   try {
     report = await verifyExport(await handle.getFile(), source, {
-      marker: overlay === drawBurnIn, signal: ac.signal,
+      marker, compare: !hud, signal: ac.signal,
       onProgress: ({ done, total }) => { dlg.progress(done / total); dlg.stats(`checked ${done.toLocaleString("en-US")} of ${total.toLocaleString("en-US")} frames`); },
     });
   } catch (e) {
@@ -235,6 +359,8 @@ async function runAnalyse() {
   state.td = td;
   state.tdSavedAs = null;
   state.debugCache = {};
+  state.clusterSmoothing = 1.5;   // what rebuildDerived used
+  recompose();
   setPhase("ready");
   syncTimeline();
   viewer.draw();
@@ -256,6 +382,7 @@ async function saveTracks() {
   try {
     handle = await showSaveFilePicker({ suggestedName: `${base}.tracks.json`, types: [{ description: "Track data", accept: { "application/json": [".json"] } }] });
   } catch (e) { if (isAbort(e)) return; throw e; }
+  state.td.look = state.params;   // the project remembers its look
   const w = await handle.createWritable();
   await w.write(serialize(state.td));
   await w.close();
@@ -276,16 +403,25 @@ async function loadTracks() {
   const fatal = diff.filter(d => d.fatal);
   if (fatal.length)
     throw new UserError(`This track data belongs to a different clip (${fatal.map(d => `${d.field}: saved ${d.saved}, open clip ${d.open}`).join("; ")}). Open ${td.source.name} first, or analyse this clip.`);
-  state.td = td;
-  state.tdSavedAs = handle.name;
-  state.debugCache = {};
-  syncTimeline();
-  viewer.draw();
-  render();
+  adoptTrackData(td, handle.name);
   if (diff.length)
     openDialog("Loaded, with a warning").done("Loaded, with a warning",
       `The track data was saved for a file that differs from the open one (${diff.map(d => `${d.field}: saved ${d.saved}, open ${d.open}`).join("; ")}). The frame count matches, so it has been loaded. If the clip was re-rendered, analyse it again.`, "warn");
 }
+
+/** Makes loaded track data current: restores its look, recomposes, redraws. */
+function adoptTrackData(td, name = null) {
+  state.td = td;
+  state.tdSavedAs = name;
+  state.debugCache = {};
+  state.clusterSmoothing = null;
+  if (td.look) { state.params = sanitize(td.look); panel.setParams(state.params); }
+  recompose();
+  syncTimeline();
+  viewer.draw();
+  render();
+}
+globalThis.heroTracker.adoptTrackData = adoptTrackData;
 
 /* ---------------- cuts: markers, editing, accuracy ---------------- */
 
@@ -303,6 +439,8 @@ function syncTimeline() {
 
 function afterCutEdit() {
   rebuildDerived(state.td);   // person tracks and clusters follow the new cuts at once
+  state.clusterSmoothing = 1.5;
+  recompose();
   state.td.edited = true;
   state.debugCache = {};
   syncTimeline();
@@ -437,13 +575,14 @@ bitrateInput.addEventListener("dblclick", () => {
 });
 
 addEventListener("keydown", e => {
-  if (e.target.closest?.("input[type=number], textarea, dialog[open]") || state.phase !== "ready") return;
+  if (e.target.closest?.("input[type=number], input[type=text], select, textarea, dialog[open]") || state.phase !== "ready") return;
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
     e.preventDefault();
     timeline.step(e.key === "ArrowLeft" ? -1 : 1, e.shiftKey);
   } else if (e.key === "Home") timeline.seek(0);
   else if (e.key === "End") timeline.seek(Infinity);
+  else if (e.key === " ") { e.preventDefault(); viewer.toggle(); }
   else if (e.key === "[" || e.key === "]") jumpCut(e.key === "[" ? -1 : 1);
   else if (e.key === "c" || e.key === "C") addCut(timeline.index);
   else if ((e.key === "Delete" || e.key === "Backspace") && timeline.selected !== null) { e.preventDefault(); removeCut(timeline.selected); }
@@ -466,6 +605,8 @@ function render() {
   $("saveTracks").disabled = !state.td || busy;
   $("loadTracks").disabled = !source || busy;
   $("copyCuts").disabled = !state.td;
+  $("play").disabled = !source || busy;
+  $("checkFrame").disabled = !source || busy;
   renderAnalysis();
   $("export").title = env && !env.fsa ? "This browser can't save straight to disk. Use Chrome or Edge." : "";
   bitrateInput.disabled = !source || phase === "exporting";

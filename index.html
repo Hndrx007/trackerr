@@ -14,6 +14,10 @@
   <span class="clip-info" id="clipInfo"></span>
   <span class="spacer"></span>
   <button class="sys" id="sys" popovertarget="envPanel"><span class="dot" id="sysDot"></span><span id="sysText">Checking browser…</span></button>
+  <div class="seg" id="viewMode" role="group" aria-label="View">
+    <button data-mode="hud" aria-pressed="true" title="The look, as it will export">HUD</button>
+    <button data-mode="debug" aria-pressed="false" title="What analysis found: detections, IDs, swarm points, cuts">Debug</button>
+  </div>
   <button id="analyse" disabled>Analyse</button>
   <button class="primary" id="export" disabled>Export clip</button>
 </header>
@@ -30,48 +34,55 @@
   </main>
 
   <aside class="panel" id="panel">
-    <section>
-      <h3>Clip</h3>
-      <dl id="clipDetails"><dt>No clip open</dt><dd></dd></dl>
-    </section>
-    <section>
-      <h3>Analysis</h3>
-      <dl id="analysisDetails"><dt>Not analysed</dt><dd></dd></dl>
-      <div class="row">
-        <button id="saveTracks" disabled>Save track data</button>
-        <button id="loadTracks" disabled>Load…</button>
-      </div>
-      <p class="note" id="analysisNote"></p>
-    </section>
-    <section id="debugSection">
-      <h3>Debug overlay</h3>
-      <label class="check"><input type="checkbox" data-debug="persons" checked> People (tracked, with IDs)</label>
-      <label class="check"><input type="checkbox" data-debug="detections" checked> Raw detections</label>
-      <label class="check"><input type="checkbox" data-debug="swarm" checked> Swarm points</label>
-      <label class="check"><input type="checkbox" data-debug="clusters"> Cluster candidates</label>
-      <label class="check"><input type="checkbox" data-debug="info" checked> Shot and cut signal readout</label>
-      <label class="check"><input type="checkbox" id="showGraph" checked> Cut signal graph</label>
-    </section>
-    <section id="cutSection">
-      <h3>Cuts</h3>
-      <p class="note"><kbd>[</kbd> <kbd>]</kbd> previous / next cut · <kbd>C</kbd> add a cut at the playhead · click a marker, then <kbd>Delete</kbd> to remove it</p>
-      <dl id="cutStats"></dl>
-      <div class="row"><button id="copyCuts" disabled>Copy cut report</button></div>
-    </section>
-    <section>
-      <h3>Export</h3>
-      <div class="row">
-        <label for="bitrate">Bitrate</label>
-        <input type="number" id="bitrate" min="1" max="300" step="0.1" disabled title="Double-click to reset">
-        <span>Mbps</span>
-      </div>
-      <p class="note" id="bitrateNote">Default is 0.35 bits per pixel per frame. Double-click to reset.</p>
-      <p class="note">H.264 High, a keyframe every second, no audio. Same size, frame rate and frame count as the source.</p>
-    </section>
-    <section>
-      <h3>Overlay</h3>
-      <p class="note">The export burns in each frame's number plus a marker strip the export check reads back (M1 test overlay). The HUD look replaces it in M3. After analysis the viewer shows the debug overlay instead.</p>
-    </section>
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-tab="look" aria-selected="true">Look</button>
+      <button role="tab" data-tab="analysis" aria-selected="false">Analysis</button>
+      <button role="tab" data-tab="clip" aria-selected="false">Clip</button>
+    </nav>
+    <div class="tab" data-tab="look" id="settings"></div>
+    <div class="tab" data-tab="analysis" hidden>
+      <section>
+        <h3>Analysis</h3>
+        <dl id="analysisDetails"><dt>Not analysed</dt><dd></dd></dl>
+        <div class="row">
+          <button id="saveTracks" disabled>Save project</button>
+          <button id="loadTracks" disabled>Open project…</button>
+        </div>
+        <p class="note" id="analysisNote"></p>
+      </section>
+      <section id="debugSection">
+        <h3>Debug view</h3>
+        <label class="check"><input type="checkbox" data-debug="persons" checked> People (tracked, with IDs)</label>
+        <label class="check"><input type="checkbox" data-debug="detections" checked> Raw detections</label>
+        <label class="check"><input type="checkbox" data-debug="swarm" checked> Swarm points</label>
+        <label class="check"><input type="checkbox" data-debug="clusters"> Cluster candidates</label>
+        <label class="check"><input type="checkbox" data-debug="info" checked> Shot and cut signal readout</label>
+        <label class="check"><input type="checkbox" id="showGraph" checked> Cut signal graph</label>
+      </section>
+      <section id="cutSection">
+        <h3>Cuts</h3>
+        <p class="note"><kbd>[</kbd> <kbd>]</kbd> previous / next cut · <kbd>C</kbd> add a cut at the playhead · click a marker, then <kbd>Delete</kbd> to remove it</p>
+        <dl id="cutStats"></dl>
+        <div class="row"><button id="copyCuts" disabled>Copy cut report</button></div>
+      </section>
+    </div>
+    <div class="tab" data-tab="clip" hidden>
+      <section>
+        <h3>Clip</h3>
+        <dl id="clipDetails"><dt>No clip open</dt><dd></dd></dl>
+      </section>
+      <section>
+        <h3>Export</h3>
+        <div class="row">
+          <label for="bitrate">Bitrate</label>
+          <input type="number" id="bitrate" min="1" max="300" step="0.1" disabled title="Double-click to reset">
+          <span>Mbps</span>
+        </div>
+        <p class="note">Default is 0.35 bits per pixel per frame. Double-click to reset.</p>
+        <label class="check"><input type="checkbox" id="burnIn"> Burn in frame numbers (for checking alignment in Resolve)</label>
+        <p class="note">H.264 High, a keyframe every second, no audio. Same size, frame rate and frame count as the source. Before analysis, the export carries only the frame-number burn-in.</p>
+      </section>
+    </div>
   </aside>
 </div>
 
@@ -80,9 +91,10 @@
   <span class="fr"><span data-frame>f –</span> <span data-total></span></span>
   <span class="steps">
     <button data-prev title="Previous frame (←), 1 s back (Shift+←)" disabled>◀</button>
+    <button id="play" title="Play / pause (Space)" disabled>Play</button>
     <button data-next title="Next frame (→), 1 s on (Shift+→)" disabled>▶</button>
   </span>
-  <span></span>
+  <button id="checkFrame" title="Render this frame at full resolution through the export path" disabled>Check frame</button>
   <div class="lanes">
     <div class="markers" data-markers></div>
     <input type="range" data-scrub min="0" max="0" value="0" disabled aria-label="Frame">
@@ -98,6 +110,11 @@
   <div class="progress" id="dlgBarWrap"><i id="dlgBar"></i></div>
   <div class="stats" id="dlgStats"></div>
   <div class="actions"><button id="dlgCancel">Cancel</button><button id="dlgClose" class="primary" hidden>Close</button></div>
+</dialog>
+
+<dialog id="checkDlg" class="check-dlg">
+  <div class="check-head"><h2>Check frame</h2><span class="stats" id="checkInfo"></span><span class="spacer"></span><button id="checkClose" class="primary">Close</button></div>
+  <div class="pan" id="checkPan"><canvas id="checkCanvas"></canvas></div>
 </dialog>
 
 <script type="module" src="app/main.js"></script>
