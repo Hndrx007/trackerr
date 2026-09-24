@@ -1,7 +1,7 @@
 // App state machine and wiring. States: empty → loading → ready ⇄ analysing / exporting.
 import { checkEnvironment, defaultBitrate } from "./env.js";
 import { openSource, fpsLabel } from "./media.js";
-import { exportClip, verifyExport, assertCanExport } from "./export.js";
+import { exportClip, verifyExport, assertCanExport, exportExtension, describeAudio } from "./export.js";
 import { drawBurnIn } from "./render/burnin.js";
 import { Viewer } from "./ui/viewer.js";
 import { Timeline, timecode } from "./ui/timeline.js";
@@ -36,6 +36,7 @@ const state = {
   clusterSmoothing: null,   // smoothing the current cluster candidates were built with
   view: "hud",              // hud | debug
   burnIn: false,
+  audio: false,       // copy the source's audio into the export (off: the export sits over the song in Resolve)
   showPeople: true,         // pickable person boxes while paused
   hoverPerson: null,
   pendingCutEdits: new Set(),   // frames whose neighbouring shots need their swarm re-tracked
@@ -133,6 +134,7 @@ document.querySelectorAll("#viewMode [data-mode]").forEach(b => b.addEventListen
 }));
 $("play").onclick = () => viewer.toggle();
 $("burnIn").onchange = e => { state.burnIn = e.target.checked; viewer.draw(); };
+$("audio").onchange = e => { state.audio = e.target.checked; };
 $("checkFrame").onclick = () => checkFrame().catch(e => showError(e, "Couldn't render the check frame"));
 
 // Renders the current frame at full resolution through the export path (same renderer, same
@@ -273,11 +275,14 @@ async function runExport() {
   assertCanExport();
   const overlay = exportOverlay(), hud = !!state.layout, marker = !hud || state.burnIn;
   const base = source.info.name.replace(/\.[^.]+$/, "");
+  const audio = state.audio && !!source.info.audio, ext = exportExtension(source.info, audio);
   let handle;
   try {
     handle = await showSaveFilePicker({
-      suggestedName: `${base}_hud.mp4`,
-      types: [{ description: "MP4 video", accept: { "video/mp4": [".mp4"] } }],
+      suggestedName: `${base}_hud.${ext}`,
+      types: [ext === "mov"
+        ? { description: "QuickTime movie", accept: { "video/quicktime": [".mov"] } }
+        : { description: "MP4 video", accept: { "video/mp4": [".mp4"] } }],
     });
   } catch (e) { if (isAbort(e)) return; throw e; }
   if (state.handle && await state.handle.isSameEntry(handle))
@@ -290,9 +295,9 @@ async function runExport() {
   const { info } = source;
   let result;
   try {
-    dlg.body(`${info.width}×${info.height} · ${fpsLabel(info.fps)} fps · ${info.frameCount.toLocaleString("en-US")} frames → ${handle.name}`);
+    dlg.body(`${info.width}×${info.height} · ${fpsLabel(info.fps)} fps · ${info.frameCount.toLocaleString("en-US")} frames${audio ? " + audio" : ""} → ${handle.name}`);
     result = await exportClip({
-      source, fileHandle: handle, overlay, bitrate: state.bitrate, signal: ac.signal,
+      source, fileHandle: handle, overlay, bitrate: state.bitrate, signal: ac.signal, audio,
       onProgress: ({ done, total, fps, eta }) => {
         dlg.progress(done / total);
         dlg.stats(`frame ${done.toLocaleString("en-US")} of ${total.toLocaleString("en-US")} · ${fps.toFixed(1)} fps · ${formatDuration(eta)} left`);
@@ -318,7 +323,7 @@ async function runExport() {
   let report;
   try {
     report = await verifyExport(await handle.getFile(), source, {
-      marker, compare: !hud, signal: ac.signal,
+      marker, compare: !hud, audio, signal: ac.signal,
       onProgress: ({ done, total }) => { dlg.progress(done / total); dlg.stats(`checked ${done.toLocaleString("en-US")} of ${total.toLocaleString("en-US")} frames`); },
     });
   } catch (e) {
@@ -695,6 +700,10 @@ function render() {
   renderAnalysis();
   $("export").title = env && !env.fsa ? "This browser can't save straight to disk. Use Chrome or Edge." : "";
   bitrateInput.disabled = !source || phase === "exporting";
+  $("audio").disabled = !info?.audio || phase === "exporting";
+  $("audioNote").textContent = !info ? "" : !info.audio ? "This clip has no audio."
+    : info.quicktime ? "Copied from the source unchanged. With audio, a MOV source exports as a MOV."
+    : "Copied from the source unchanged.";
   if (!info) {
     $("clipInfo").textContent = "";
     $("clipDetails").replaceChildren(Object.assign(document.createElement("dt"), { textContent: "No clip open" }));
@@ -711,6 +720,7 @@ function render() {
     ["Frames", info.frameCount.toLocaleString("en-US")],
     ["Duration", timecode(info.frameCount, info.fps)],
     ["Colour", `${cs.primaries ?? "untagged"} / ${cs.transfer ?? "–"} / ${cs.fullRange ? "full" : "video"} range`],
+    ["Audio", info.audio ? describeAudio(info.audio) : "none"],
   ];
   if (info.startTime > 0) rows.push(["First frame at", `${info.startTime.toFixed(3)} s (export starts at 0)`]);
   $("clipDetails").replaceChildren(...rows.flatMap(([k, v]) => [

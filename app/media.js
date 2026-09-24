@@ -63,9 +63,10 @@ async function packetTimestamps(track) {
 
 /**
  * Opens and validates a clip. Throws UserError with a message that says what to do.
- * Returns { input, track, info, dispose }. `info` is plain data:
- * { name, byteSize, container, codecString, width, height, fps: [num, den], frameCount,
- *   timestamps: Float64Array (presentation order), startTime, colorSpace }
+ * Returns { input, track, audioTrack (or null), info, dispose }. `info` is plain data:
+ * { name, byteSize, container, quicktime, codecString, width, height, fps: [num, den], frameCount,
+ *   timestamps: Float64Array (presentation order), startTime, colorSpace,
+ *   audio: { codec, sampleRate, channels } or null }
  */
 export async function openSource(file) {
   const input = new Input({ formats: ALL_FORMATS, source: new BlobSource(file) });
@@ -103,12 +104,18 @@ export async function openSource(file) {
     if (!cfr)
       throw new UserError(`The frame rate varies (frame timing is up to ${(worstDeviation * 100).toFixed(1)}% off). Render from Resolve with a constant frame rate and open that.`);
 
+    const audioTrack = await input.getPrimaryAudioTrack();
     const info = {
       name: file.name, byteSize: file.size, container: format.name, codecString,
+      quicktime: format instanceof QuickTimeInputFormat,
       width, height, fps, frameCount: timestamps.length, timestamps, startTime: timestamps[0],
       colorSpace: { ...(await track.getColorSpace()) },
+      audio: audioTrack && {
+        codec: await audioTrack.getCodec(), sampleRate: await audioTrack.getSampleRate(),
+        channels: await audioTrack.getNumberOfChannels(),
+      },
     };
-    return { input, track, info, dispose: () => input.dispose() };
+    return { input, track, audioTrack, info, dispose: () => input.dispose() };
   } catch (e) {
     input.dispose();
     throw e;

@@ -29,6 +29,9 @@ Then open <http://localhost:8000/>. `tools/serve.py` is `python -m http.server` 
 5. **Choose a look** in the Look tab: Surveillance, Lock-on, Scan, Minimal or Target. Hover a look to preview it on the current frame. Every setting is a slider; double-click one to reset it. Save your own looks, and import or export them as JSON.
 6. **Play** (`Space`) to see it moving, and **Check frame** to see the current frame at full resolution through the export path.
 7. **Export clip.** The file streams to disk, then the tool reopens it and checks it frame by frame against the source.
+   - Audio is off by default, because the export goes over the song in Resolve.
+   - **Include audio** (Clip tab) copies the source's audio track unchanged, shifted to stay in sync with the picture. It's checked against the source packet by packet.
+   - A MOV source with audio exports as a MOV, since Resolve renders MOVs with PCM audio.
 8. In Resolve, put the export on V2 over the source; see [docs/m1-resolve-check.md](docs/m1-resolve-check.md) for how to confirm the alignment.
 
 The **Keys** button lists every shortcut.

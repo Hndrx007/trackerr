@@ -82,8 +82,11 @@
           <span>Mbps</span>
         </div>
         <p class="note">Default is 0.35 bits per pixel per frame. Double-click to reset.</p>
+        <label class="check"><input type="checkbox" id="audio" disabled> Include audio</label>
+        <p class="note" id="audioNote"></p>
+        <p class="note">Leave audio off when the export goes over the song in Resolve, so the song isn't doubled. Turn it on for a file to watch or share.</p>
         <label class="check"><input type="checkbox" id="burnIn"> Burn in frame numbers (for checking alignment in Resolve)</label>
-        <p class="note">H.264 High, a keyframe every second, no audio. Same size, frame rate and frame count as the source. Before analysis, the export carries only the frame-number burn-in.</p>
+        <p class="note">H.264 High, a keyframe every second. Same size, frame rate and frame count as the source. Before analysis, the export carries only the frame-number burn-in.</p>
       </section>
     </div>
   </aside>

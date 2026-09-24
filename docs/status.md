@@ -19,6 +19,13 @@ Last updated 2026-09-24. Every milestone in the spec is built. The remaining ite
 2. **Resolve alignment.** Tick **Burn in frame numbers** (Clip tab), export, and stack the export on its source in Resolve following [m1-resolve-check.md](m1-resolve-check.md). Do it once at 1080p and once at 4K if you can.
 3. **Your labelled cut test clip.** Analyse it, correct the cuts, and use **Copy cut report** (Analysis tab) for the precision and recall the M2 acceptance asks for.
 
+## Changes from the spec
+
+- **Audio (2026-09-24, your decision).** The spec said "No audio in v1". There's now an **Include audio** option in the Clip tab, off by default.
+  - It copies the source's audio unchanged, shifted by the video's start time so the two stay in sync.
+  - The export check compares every audio packet with the source, and a MOV source with audio exports as a MOV.
+  - On your music video, whose picture starts 0.042 s after its sound, ffmpeg found the export's audio sample-exact against the picture from start to end.
+
 ## Known limitations
 
 - **No timecode track in the export.** Mediabunny can't write one, so line the export up by position in Resolve.
