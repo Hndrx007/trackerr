@@ -39,6 +39,21 @@ test("At source size the frame is copied pixel for pixel (no filtering, no flip)
   } finally { frame.close(); r.dispose(); }
 });
 
+test("A snapshot keeps the picture after the renderer is disposed (Check frame)", async () => {
+  const w = 97, h = 55;
+  const { frame, data } = patternFrame(w, h);
+  const r = new Renderer(new OffscreenCanvas(w, h));
+  let bmp;
+  try { r.render(frame); bmp = await r.snapshot(); } finally { frame.close(); r.dispose(); }
+  const x = new OffscreenCanvas(w, h).getContext("2d");
+  x.drawImage(bmp, 0, 0);
+  bmp.close();
+  const got = x.getImageData(0, 0, w, h).data;
+  let diff = 0;
+  for (let i = 0; i < got.length; i += 4) diff += +(Math.abs(got[i] - data[i]) > 1 || Math.abs(got[i + 1] - data[i + 1]) > 1 || Math.abs(got[i + 2] - data[i + 2]) > 1);
+  eq(diff, 0, "pixels that differ from the source");
+});
+
 test("Determinism: the same frame and overlay give byte-identical output, across renderer instances", async () => {
   const { frame } = patternFrame(320, 180, 3);
   const hashes = [];

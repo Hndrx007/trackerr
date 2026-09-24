@@ -145,9 +145,11 @@ async function checkFrame() {
   const f = Math.max(0, timeline.index), { width: W, height: H } = source.info;
   const r = new Renderer(new OffscreenCanvas(W, H));
   const sample = await (await import("./media.js")).frameReader(source)(f);
-  try { r.render(sample, (o => exportOverlay()(o, f))); } finally { sample.close(); }
-  const bmp = r.canvas.transferToImageBitmap();
-  r.dispose();
+  let bmp;
+  try {
+    r.render(sample, (o => exportOverlay()(o, f)));
+    bmp = await r.snapshot();
+  } finally { sample.close(); r.dispose(); }
   const c = $("checkCanvas");
   c.width = W; c.height = H;
   c.getContext("bitmaprenderer").transferFromImageBitmap(bmp);

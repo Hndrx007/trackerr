@@ -182,6 +182,13 @@ export class Renderer {
     if (gl.isContextLost()) throw new UserError("The GPU reset while rendering. Close other GPU-heavy apps and try again.");
   }
 
+  /**
+   * Copies the last rendered picture into an ImageBitmap that outlives the renderer. Call it
+   * straight after render(). transferToImageBitmap() isn't used because its bitmap stays tied to
+   * the GL context, so dispose() blanks it.
+   */
+  snapshot() { return createImageBitmap(this.canvas); }
+
   /** Releases GPU resources. The renderer can't be used afterwards. */
   dispose() {
     this.gl.getExtension("WEBGL_lose_context")?.loseContext();
